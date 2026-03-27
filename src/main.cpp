@@ -1,5 +1,6 @@
 #include "App.h"
 #include <print>
+#include <chrono>
 
 namespace
 {
@@ -19,6 +20,8 @@ namespace
             return 0;
 
         case WM_KEYDOWN:
+            // 씬 전환 키 (1/2) 처리
+            g_app.OnKeyDown(static_cast<uint32_t>(wp));
             if (wp == VK_ESCAPE)
                 DestroyWindow(hwnd);
             return 0;
@@ -56,7 +59,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nCmdShow)
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
 
     HWND hwnd = CreateWindowExW(
-        0, k_className, L"DXR Renderer",
+        0, k_className, L"DXR Ray Tracer - [1] Outdoor  [2] Indoor",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rect.right - rect.left, rect.bottom - rect.top,

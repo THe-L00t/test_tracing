@@ -10,6 +10,7 @@
 #include <wrl/client.h>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <expected>
 #include <format>
@@ -59,3 +60,33 @@ inline constexpr uint32_t k_backBufferCount = 2;
 inline constexpr uint32_t k_defaultWidth    = 1280;
 inline constexpr uint32_t k_defaultHeight   = 720;
 inline constexpr DXGI_FORMAT k_backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+// 크기 정렬 헬퍼
+inline constexpr uint64_t AlignUp(uint64_t size, uint64_t alignment)
+{
+    return (size + alignment - 1) & ~(alignment - 1);
+}
+
+// 정점 포맷: 위치 + 노멀 (24바이트)
+struct VertexPN
+{
+    float pos[3];
+    float normal[3];
+};
+
+// 씬 상수 버퍼 (256바이트, 16바이트 정렬)
+struct alignas(16) SceneCB
+{
+    float    camPos[3];      uint32_t sceneID;        // 16
+    float    camRight[3];    float    tanHalfFovY;     // 16
+    float    camUp[3];       float    aspectRatio;     // 16
+    float    camForward[3];  float    _pad0;           // 16
+    float    lightPos[3];    float    lightRadius;     // 16
+    float    lightColor[3];  float    lightIntensity;  // 16
+    // 4개 재질 × (float4 albedoRoughness + float4 metallic)
+    float    matAlbedoRoughness[4][4]; // [mat][0..3] = albedo.xyz + roughness  (64)
+    float    matMetallic[4][4];        // [mat][0] = metallic                   (64)
+    // 96 + 128 = 224, 256까지 패딩
+    float    _fill[8];
+};
+static_assert(sizeof(SceneCB) == 256, "SceneCB must be 256 bytes");

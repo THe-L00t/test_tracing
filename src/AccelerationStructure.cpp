@@ -1,5 +1,6 @@
 #include "AccelerationStructure.h"
 #include <cstring>
+#include <vector>
 
 // ---------------------------------------------------------------
 // 버퍼 생성 헬퍼
@@ -33,14 +34,16 @@ ComPtr<ID3D12Resource> CreateBuffer(
 }
 
 // ---------------------------------------------------------------
-// BLAS
+// BLAS (VertexPN 입력 – 위치만 BLAS에, 전체 버퍼는 SRV용으로 보존)
 // ---------------------------------------------------------------
 void BLAS::Build(ID3D12Device5*              device,
                  ID3D12GraphicsCommandList4* cmdList,
-                 std::span<const float[3]>  vertices)
+                 std::span<const VertexPN>  vertices)
 {
-    // 정점 버퍼 업로드
-    const uint64_t vbSize = vertices.size() * sizeof(float[3]);
+    m_vertexCount = static_cast<uint32_t>(vertices.size());
+
+    // 정점 버퍼 업로드 (VertexPN 전체 저장 → SRV에서 노멀 참조 가능)
+    const uint64_t vbSize = vertices.size() * sizeof(VertexPN);
     m_vertexBuffer = CreateBuffer(device, vbSize,
                                   D3D12_HEAP_TYPE_UPLOAD,
                                   D3D12_RESOURCE_STATE_GENERIC_READ);
@@ -49,14 +52,14 @@ void BLAS::Build(ID3D12Device5*              device,
     std::memcpy(mapped, vertices.data(), vbSize);
     m_vertexBuffer->Unmap(0, nullptr);
 
-    // 지오메트리 기술자
+    // 지오메트리 기술자: 위치만 사용 (stride=24, offset=0)
     D3D12_RAYTRACING_GEOMETRY_DESC geoDesc{};
     geoDesc.Type  = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
     geoDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
     geoDesc.Triangles.VertexBuffer.StartAddress  = m_vertexBuffer->GetGPUVirtualAddress();
-    geoDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(float[3]);
-    geoDesc.Triangles.VertexCount                = static_cast<UINT>(vertices.size());
-    geoDesc.Triangles.VertexFormat               = DXGI_FORMAT_R32G32B32_FLOAT;
+    geoDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(VertexPN);  // 24바이트
+    geoDesc.Triangles.VertexCount                = m_vertexCount;
+    geoDesc.Triangles.VertexFormat               = DXGI_FORMAT_R32G32B32_FLOAT;  // pos만 읽음
 
     // 사전 빌드 정보
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs{};
@@ -93,31 +96,44 @@ void BLAS::Build(ID3D12Device5*              device,
 }
 
 // ---------------------------------------------------------------
-// TLAS
+// TLAS (다중 인스턴스 지원)
 // ---------------------------------------------------------------
 void TLAS::Build(ID3D12Device5*              device,
                  ID3D12GraphicsCommandList4* cmdList,
-                 ID3D12Resource*             blasResource)
+                 std::span<const TLASInstance> instances)
 {
-    // 단위 행렬 인스턴스 하나
-    D3D12_RAYTRACING_INSTANCE_DESC inst{};
-    // 3x4 행 우선 변환 행렬 = 단위 행렬
-    inst.Transform[0][0] = inst.Transform[1][1] = inst.Transform[2][2] = 1.0f;
-    inst.InstanceMask                       = 0xFF;
-    inst.AccelerationStructure              = blasResource->GetGPUVirtualAddress();
+    const uint32_t count = static_cast<uint32_t>(instances.size());
 
-    m_instanceDescs = CreateBuffer(device, sizeof(inst),
+    // 인스턴스 기술자 배열 구성
+    std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instDescs(count);
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        const auto& src = instances[i];
+        auto&       dst = instDescs[i];
+
+        // 변환 행렬 복사 (3x4 row-major)
+        std::memcpy(dst.Transform, src.transform, sizeof(dst.Transform));
+
+        dst.InstanceID                          = src.instanceID;
+        dst.InstanceMask                        = src.mask;
+        dst.InstanceContributionToHitGroupIndex = 0;
+        dst.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
+        dst.AccelerationStructure               = src.blasResource->GetGPUVirtualAddress();
+    }
+
+    const uint64_t instBufSize = count * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
+    m_instanceDescs = CreateBuffer(device, instBufSize,
                                    D3D12_HEAP_TYPE_UPLOAD,
                                    D3D12_RESOURCE_STATE_GENERIC_READ);
     void* mapped = nullptr;
     m_instanceDescs->Map(0, nullptr, &mapped);
-    std::memcpy(mapped, &inst, sizeof(inst));
+    std::memcpy(mapped, instDescs.data(), instBufSize);
     m_instanceDescs->Unmap(0, nullptr);
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs{};
     inputs.Type          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
     inputs.Flags         = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-    inputs.NumDescs      = 1;
+    inputs.NumDescs      = count;
     inputs.DescsLayout   = D3D12_ELEMENTS_LAYOUT_ARRAY;
     inputs.InstanceDescs = m_instanceDescs->GetGPUVirtualAddress();
 

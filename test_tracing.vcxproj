@@ -91,6 +91,7 @@
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\App.cpp" />
+    <ClCompile Include="src\Camera.cpp" />
     <ClCompile Include="src\D3D12Core.cpp" />
     <ClCompile Include="src\DXRPipeline.cpp" />
     <ClCompile Include="src\AccelerationStructure.cpp" />
@@ -101,6 +102,7 @@
 
   <ItemGroup>
     <ClInclude Include="src\App.h" />
+    <ClInclude Include="src\Camera.h" />
     <ClInclude Include="src\D3D12Core.h" />
     <ClInclude Include="src\DXRPipeline.h" />
     <ClInclude Include="src\AccelerationStructure.h" />

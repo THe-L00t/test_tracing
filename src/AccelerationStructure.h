@@ -13,26 +13,38 @@ ComPtr<ID3D12Resource> CreateBuffer(
 class BLAS
 {
 public:
-    // 인라인 삼각형 (정점 / 인덱스 모두 CPU에서 업로드)
+    // VertexPN 배열로 BLAS 빌드 (위치만 사용, 노멀은 SRV용)
     void Build(ID3D12Device5*              device,
                ID3D12GraphicsCommandList4* cmdList,
-               std::span<const float[3]>  vertices);  // xyz 배열
+               std::span<const VertexPN>  vertices);
 
-    ID3D12Resource* Resource() const noexcept { return m_blas.Get(); }
+    ID3D12Resource* Resource()    const noexcept { return m_blas.Get(); }
+    ID3D12Resource* VertexBuffer()const noexcept { return m_vertexBuffer.Get(); }
+    uint32_t        VertexCount() const noexcept { return m_vertexCount; }
 
 private:
     ComPtr<ID3D12Resource> m_vertexBuffer;
     ComPtr<ID3D12Resource> m_scratch;
     ComPtr<ID3D12Resource> m_blas;
+    uint32_t               m_vertexCount = 0;
 };
 
-// Top-Level Acceleration Structure (단일 인스턴스)
+// TLAS 인스턴스 기술자
+struct TLASInstance
+{
+    ID3D12Resource* blasResource = nullptr;
+    float           transform[3][4] = {};   // row-major 3x4 변환 행렬
+    uint32_t        instanceID  = 0;
+    uint32_t        mask        = 0xFF;
+};
+
+// Top-Level Acceleration Structure (다중 인스턴스 지원)
 class TLAS
 {
 public:
     void Build(ID3D12Device5*              device,
                ID3D12GraphicsCommandList4* cmdList,
-               ID3D12Resource*             blasResource);
+               std::span<const TLASInstance> instances);
 
     ID3D12Resource* Resource() const noexcept { return m_tlas.Get(); }
 

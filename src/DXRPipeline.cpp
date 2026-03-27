@@ -68,10 +68,14 @@ namespace
 
 // ---------------------------------------------------------------
 // 글로벌 루트 시그니처
-// 슬롯: u0 = 출력 UAV, t0 = TLAS SRV
+// 파라미터 0: 디스크립터 테이블 (UAV u0 + SRV t0..t3)
+// 파라미터 1: 인라인 루트 CBV b0 (씬 상수)
 // ---------------------------------------------------------------
 ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
 {
+    // 파라미터 0: 디스크립터 테이블
+    //   Range 0: UAV 1개 (u0) - 렌더 타겟
+    //   Range 1: SRV 4개 (t0..t3) - TLAS + VB 3개
     D3D12_DESCRIPTOR_RANGE1 ranges[2]{};
 
     ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
@@ -82,22 +86,31 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[0].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     ranges[1].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    ranges[1].NumDescriptors                    = 1;
+    ranges[1].NumDescriptors                    = 4;   // t0(TLAS) + t1(plane) + t2(cube) + t3(room)
     ranges[1].BaseShaderRegister                = 0;
     ranges[1].RegisterSpace                     = 0;
-    ranges[1].OffsetInDescriptorsFromTableStart = 1;
+    ranges[1].OffsetInDescriptorsFromTableStart = 1;   // 힙 슬롯 1부터
     ranges[1].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
-    D3D12_ROOT_PARAMETER1 param{};
-    param.ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    param.DescriptorTable.NumDescriptorRanges = 2;
-    param.DescriptorTable.pDescriptorRanges   = ranges;
-    param.ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+    D3D12_ROOT_PARAMETER1 params[2]{};
+
+    // 파라미터 0: 디스크립터 테이블
+    params[0].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[0].DescriptorTable.NumDescriptorRanges = 2;
+    params[0].DescriptorTable.pDescriptorRanges   = ranges;
+    params[0].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+    // 파라미터 1: 인라인 루트 CBV (b0)
+    params[1].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[1].Descriptor.ShaderRegister = 0;
+    params[1].Descriptor.RegisterSpace  = 0;
+    params[1].Descriptor.Flags          = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE;
+    params[1].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_VERSIONED_ROOT_SIGNATURE_DESC rsDesc{};
     rsDesc.Version                    = D3D_ROOT_SIGNATURE_VERSION_1_1;
-    rsDesc.Desc_1_1.NumParameters     = 1;
-    rsDesc.Desc_1_1.pParameters       = &param;
+    rsDesc.Desc_1_1.NumParameters     = 2;
+    rsDesc.Desc_1_1.pParameters       = params;
     rsDesc.Desc_1_1.Flags             = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
     ComPtr<ID3DBlob> blob, err;
@@ -111,16 +124,18 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
 
 // ---------------------------------------------------------------
 // RTPSO 생성
+// 익스포트: RayGen, MissShader, MissShadow, ClosestHit
 // ---------------------------------------------------------------
 void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig)
 {
     // DXC로 lib_6_3 셰이더 컴파일
     auto dxilBlob = CompileShaderDXC(L"shaders/Raytracing.hlsl");
 
-    // 1. DXIL 라이브러리
+    // 1. DXIL 라이브러리 (4개 진입점 익스포트)
     D3D12_EXPORT_DESC exports[] = {
         { L"RayGen",     nullptr, D3D12_EXPORT_FLAG_NONE },
         { L"MissShader", nullptr, D3D12_EXPORT_FLAG_NONE },
+        { L"MissShadow", nullptr, D3D12_EXPORT_FLAG_NONE },
         { L"ClosestHit", nullptr, D3D12_EXPORT_FLAG_NONE },
     };
     D3D12_DXIL_LIBRARY_DESC libDesc{};
@@ -128,31 +143,34 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
     libDesc.NumExports  = static_cast<UINT>(std::size(exports));
     libDesc.pExports    = exports;
 
-    // 2. 히트 그룹
+    // 2. 히트 그룹 (ClosestHit만 포함, MissShadow는 별도 Miss 슬롯)
     D3D12_HIT_GROUP_DESC hitGroup{};
     hitGroup.HitGroupExport         = L"HitGroup";
     hitGroup.Type                   = D3D12_HIT_GROUP_TYPE_TRIANGLES;
     hitGroup.ClosestHitShaderImport = L"ClosestHit";
 
-    // 3. 셰이더 설정 (페이로드 = float4 색상)
+    // 3. 셰이더 설정
+    //    페이로드: RayPayload(float3 color + uint depth) = 16바이트
+    //             ShadowPayload(float vis) = 4바이트
+    //    MaxPayloadSizeInBytes는 두 페이로드 중 큰 것 사용 (패딩 포함 20)
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig{};
-    shaderConfig.MaxPayloadSizeInBytes   = sizeof(float) * 4;
-    shaderConfig.MaxAttributeSizeInBytes = sizeof(float) * 2;
+    shaderConfig.MaxPayloadSizeInBytes   = 20;  // float3(12) + uint(4) + 패딩(4)
+    shaderConfig.MaxAttributeSizeInBytes = sizeof(float) * 2;  // 배리센트릭
 
-    // 4. 파이프라인 설정 (재귀 깊이 1)
+    // 4. 파이프라인 설정 (재귀 깊이 2 - 반사 레이)
     D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig{};
-    pipelineConfig.MaxTraceRecursionDepth = 1;
+    pipelineConfig.MaxTraceRecursionDepth = 2;
 
     // 5. 글로벌 루트 시그니처
     D3D12_GLOBAL_ROOT_SIGNATURE globalRS{};
     globalRS.pGlobalRootSignature = globalRootSig;
 
     D3D12_STATE_SUBOBJECT subobjects[5]{};
-    subobjects[0] = { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,              &libDesc        };
-    subobjects[1] = { D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,                 &hitGroup       };
-    subobjects[2] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,  &shaderConfig   };
-    subobjects[3] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG,&pipelineConfig };
-    subobjects[4] = { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,     &globalRS       };
+    subobjects[0] = { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,               &libDesc        };
+    subobjects[1] = { D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,                  &hitGroup       };
+    subobjects[2] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,   &shaderConfig   };
+    subobjects[3] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pipelineConfig };
+    subobjects[4] = { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,      &globalRS       };
 
     D3D12_STATE_OBJECT_DESC soDesc{};
     soDesc.Type          = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
@@ -163,7 +181,7 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
                   "RTPSO 생성 실패");
     ThrowIfFailed(m_pso.As(&m_psoProps));
 
-    std::println("[DXRPipeline] RTPSO 생성 완료");
+    std::println("[DXRPipeline] RTPSO 생성 완료 (RayGen/MissShader/MissShadow/ClosestHit)");
 }
 
 void DXRPipeline::BuildShaderTable(ID3D12Device* device)
@@ -171,7 +189,8 @@ void DXRPipeline::BuildShaderTable(ID3D12Device* device)
     ShaderTable::Desc desc{};
     desc.rayGenID   = m_psoProps->GetShaderIdentifier(L"RayGen");
     desc.missID     = m_psoProps->GetShaderIdentifier(L"MissShader");
+    desc.missID2    = m_psoProps->GetShaderIdentifier(L"MissShadow");
     desc.hitGroupID = m_psoProps->GetShaderIdentifier(L"HitGroup");
     m_shaderTable.Build(device, desc);
-    std::println("[DXRPipeline] 셰이더 테이블 구축 완료");
+    std::println("[DXRPipeline] 셰이더 테이블 구축 완료 (4 레코드)");
 }
