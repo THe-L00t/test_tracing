@@ -209,7 +209,7 @@ void ClosestHit(inout RayPayload payload,
         color = diffuse + ambient;
 
         // 금속 재질 반사 레이 (depth < 2)
-        if (metallic > 0.1f && payload.depth < 2u)
+        if (metallic > 0.1f && payload.depth == 0)
         {
             RayDesc reflRay;
             reflRay.Origin    = hitPos + N * 0.001f;

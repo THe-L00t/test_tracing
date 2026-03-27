@@ -88,13 +88,13 @@ void Camera::Rebuild()
         m_right[2] = -sinYaw;
     }
 
-    // Up = cross(right, forward)
-    // Up.x = R.y*F.z - R.z*F.y
-    // Up.y = R.z*F.x - R.x*F.z
-    // Up.z = R.x*F.y - R.y*F.x
-    m_up[0] = m_right[1] * m_forward[2] - m_right[2] * m_forward[1];
-    m_up[1] = m_right[2] * m_forward[0] - m_right[0] * m_forward[2];
-    m_up[2] = m_right[0] * m_forward[1] - m_right[1] * m_forward[0];
+    // Up = cross(forward, right)
+    // Up.x = F.y*R.z - F.z*R.y
+    // Up.y = F.z*R.x - F.x*R.z
+    // Up.z = F.x*R.y - F.y*R.x
+    m_up[0] = m_forward[1] * m_right[2] - m_forward[2] * m_right[1];
+    m_up[1] = m_forward[2] * m_right[0] - m_forward[0] * m_right[2];
+    m_up[2] = m_forward[0] * m_right[1] - m_forward[1] * m_right[0];
 
     // 정규화
     float upLen = sqrtf(m_up[0]*m_up[0] + m_up[1]*m_up[1] + m_up[2]*m_up[2]);

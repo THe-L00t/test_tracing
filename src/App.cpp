@@ -390,8 +390,8 @@ void App::ProcessInput(float dt)
     if (GetAsyncKeyState('E') & 0x8000) m_camera.MoveUp(-move);
 
     // 피치 (I=올려다보기, K=내려다보기)
-    if (GetAsyncKeyState('I') & 0x8000) m_camera.AddPitch( rot);
-    if (GetAsyncKeyState('K') & 0x8000) m_camera.AddPitch(-rot);
+    if (GetAsyncKeyState('I') & 0x8000) m_camera.AddPitch(-rot);
+    if (GetAsyncKeyState('K') & 0x8000) m_camera.AddPitch( rot);
 
     // 요 (J=왼쪽, L=오른쪽)
     if (GetAsyncKeyState('J') & 0x8000) m_camera.AddYaw(-rot);

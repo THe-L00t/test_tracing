@@ -157,9 +157,9 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
     shaderConfig.MaxPayloadSizeInBytes   = 20;  // float3(12) + uint(4) + 패딩(4)
     shaderConfig.MaxAttributeSizeInBytes = sizeof(float) * 2;  // 배리센트릭
 
-    // 4. 파이프라인 설정 (재귀 깊이 2 - 반사 레이)
+    // 4. 파이프라인 설정 (재귀 깊이 3: primary→shadow/reflection, reflection→shadow)
     D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig{};
-    pipelineConfig.MaxTraceRecursionDepth = 2;
+    pipelineConfig.MaxTraceRecursionDepth = 3;
 
     // 5. 글로벌 루트 시그니처
     D3D12_GLOBAL_ROOT_SIGNATURE globalRS{};
