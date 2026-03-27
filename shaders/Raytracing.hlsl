@@ -36,7 +36,8 @@ cbuffer SceneConstants : register(b0)
     float4 matMetallic;             // .xyzw = metallic for mat 0,1,2,3
     float4 matEmissive;             // .xyzw = emission intensity (0=off, >0 → albedo×intensity)
 
-    uint   frameCount;  uint   randomSeed;  uint2  _cbPad;
+    uint   frameCount;  uint   randomSeed;  float  emissBoxHalfSize; float _cbPad1;
+    float3 emissBoxCenter;  float _cbPad2;
 };
 
 // ── 페이로드 ────────────────────────────────────────────────────
@@ -112,7 +113,7 @@ float ShadowVis(float3 origin, float3 dir, float tmax)
 }
 
 // ── NEE 직접광 ──────────────────────────────────────────────────
-float3 DirectLighting(float3 hitPos, float3 N, float3 albedo, float metallic)
+float3 DirectLighting(float3 hitPos, float3 N, float3 albedo, float metallic, inout uint seed)
 {
     float3 diffAlbedo = albedo * (1.0f - metallic);
     float3 result     = float3(0.0f, 0.0f, 0.0f);
@@ -139,8 +140,8 @@ float3 DirectLighting(float3 hitPos, float3 N, float3 albedo, float metallic)
     }
     else
     {
-        // 씬 2: 컬러 포인트 라이트 2개 (역제곱 감쇠)
-        // Light 1 (워밍 앰버)
+        // 씬 2: 포인트 라이트 2개 (역제곱 감쇠)
+        // Light 1
         {
             float3 toL   = lightPos - hitPos;
             float  dist  = max(length(toL), 0.01f);
@@ -150,7 +151,7 @@ float3 DirectLighting(float3 hitPos, float3 N, float3 albedo, float metallic)
             float  vis   = ShadowVis(hitPos + N * 0.001f, L, dist - 0.01f);
             result += diffAlbedo * NdotL * lightColor * atten * vis;
         }
-        // Light 2 (쿨 블루)
+        // Light 2
         {
             float3 toL   = light2Pos - hitPos;
             float  dist  = max(length(toL), 0.01f);
@@ -159,6 +160,45 @@ float3 DirectLighting(float3 hitPos, float3 N, float3 albedo, float metallic)
             float  atten = light2Intensity / (dist * dist);
             float  vis   = ShadowVis(hitPos + N * 0.001f, L, dist - 0.01f);
             result += diffAlbedo * NdotL * light2Color * atten * vis;
+        }
+
+        // 발광 박스 면광원 NEE
+        // 박스 6개 면 중 랜덤 샘플: 각 면에서 균일 분포로 한 점 선택
+        if (emissBoxHalfSize > 0.0f)
+        {
+            // 면 인덱스 (0~5): ±X, ±Y, ±Z
+            uint  faceIdx = uint(RandFloat(seed) * 6.0f) % 6u;
+            float u = RandFloat(seed) * 2.0f - 1.0f;  // [-1,1]
+            float v = RandFloat(seed) * 2.0f - 1.0f;
+
+            float3 samplePos;
+            float3 faceNormal;
+            float  h = emissBoxHalfSize;
+            if      (faceIdx == 0u) { samplePos = emissBoxCenter + float3( h, u*h, v*h); faceNormal = float3( 1,0,0); }
+            else if (faceIdx == 1u) { samplePos = emissBoxCenter + float3(-h, u*h, v*h); faceNormal = float3(-1,0,0); }
+            else if (faceIdx == 2u) { samplePos = emissBoxCenter + float3(u*h,  h, v*h); faceNormal = float3(0, 1,0); }
+            else if (faceIdx == 3u) { samplePos = emissBoxCenter + float3(u*h, -h, v*h); faceNormal = float3(0,-1,0); }
+            else if (faceIdx == 4u) { samplePos = emissBoxCenter + float3(u*h, v*h,  h); faceNormal = float3(0,0, 1); }
+            else                    { samplePos = emissBoxCenter + float3(u*h, v*h, -h); faceNormal = float3(0,0,-1); }
+
+            float3 toS   = samplePos - hitPos;
+            float  dist2 = dot(toS, toS);
+            float  dist  = sqrt(dist2);
+            float3 L     = toS / dist;
+
+            float NdotL     = max(0.0f, dot(N, L));
+            float faceNdotL = max(0.0f, dot(faceNormal, -L));  // 광원 면→수신점 방향 코사인
+
+            if (NdotL > 0.0f && faceNdotL > 0.0f)
+            {
+                // 전체 표면적 = 6 * (2h)^2 = 24h^2
+                float totalArea = 24.0f * h * h;
+                float pdf       = 1.0f / totalArea;          // 균일 샘플링 PDF
+                float3 Le       = matAlbedoRoughness[3].xyz * matEmissive[3];
+                float  G        = NdotL * faceNdotL / dist2;
+                float  vis      = ShadowVis(hitPos + N * 0.001f, L, dist - 0.01f);
+                result += diffAlbedo * Le * G / pdf * vis;
+            }
         }
     }
     return result;
@@ -325,7 +365,7 @@ void ClosestHit(inout RayPayload payload,
     }
 
     // NEE: 직접광
-    payload.emission = DirectLighting(hitPos, N, albedo, metallic);
+    payload.emission = DirectLighting(hitPos, N, albedo, metallic, seed);
 
     // BRDF 샘플링
     float3 scatterDir;

@@ -100,10 +100,13 @@ struct alignas(16) SceneCB
     // 발광 강도 per 재질 (0=비발광, >0이면 albedo×강도 방출) (16)
     float    matEmissive[4];
 
-    // 패스 트레이싱 (32)
+    // 패스 트레이싱 + 발광 박스 면광원 (32)
     uint32_t frameCount;
     uint32_t randomSeed;
-    float    _fill[6];
+    float    emissBoxHalfSize;    // 발광 박스 반크기 (0=없음)
+    float    _cbPad1;
+    float    emissBoxCenter[3];   // 발광 박스 중심
+    float    _cbPad2;
 };
-// 검증: 64+32+32+64+16+16+4+4+24 = 256
+// 검증: 64+32+32+64+16+16+16+16 = 256
 static_assert(sizeof(SceneCB) == 256, "SceneCB must be 256 bytes");

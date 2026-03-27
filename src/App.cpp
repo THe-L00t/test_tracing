@@ -561,6 +561,7 @@ void App::UpdateSceneCB()
         cb.matAlbedoRoughness[1][0]=0.80f; cb.matAlbedoRoughness[1][1]=0.05f;
         cb.matAlbedoRoughness[1][2]=0.05f; cb.matAlbedoRoughness[1][3]=0.05f;
         cb.matMetallic[1] = 0.95f;
+        cb.emissBoxHalfSize = 0.0f;
     }
     else if (m_sceneID == 1)
     {
@@ -577,6 +578,7 @@ void App::UpdateSceneCB()
         cb.matAlbedoRoughness[3][0]=0.10f; cb.matAlbedoRoughness[3][1]=0.15f;
         cb.matAlbedoRoughness[3][2]=0.80f; cb.matAlbedoRoughness[3][3]=0.95f;
         cb.matMetallic[3] = 0.0f;
+        cb.emissBoxHalfSize = 0.0f;
     }
     else
     {
@@ -616,6 +618,12 @@ void App::UpdateSceneCB()
 
         cb.matEmissive[0] = 0.0f;
         cb.matEmissive[1] = 0.0f;
+
+        // 발광 박스 면광원 정보 (인스턴스 3: scale 0.7, center (1.8, 0.35, 0.0))
+        cb.emissBoxHalfSize    = 0.35f;
+        cb.emissBoxCenter[0]   = 1.8f;
+        cb.emissBoxCenter[1]   = 0.35f;
+        cb.emissBoxCenter[2]   = 0.0f;
     }
 
     // 패스 트레이싱 누적 파라미터
