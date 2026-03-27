@@ -34,15 +34,16 @@ void App::BuildScene()
         { -0.7f, -0.7f, 1.0f },
     };
 
-    m_core.BeginFrame();
+    // AS 빌드용: Present 없이 제출 후 GPU 대기
+    ThrowIfFailed(m_core.CmdAlloc(0)->Reset());
+    ThrowIfFailed(m_core.CmdList()->Reset(m_core.CmdAlloc(0), nullptr));
 
     m_blas.Build(m_core.Device(), m_core.CmdList(),
                  std::span{ verts });
     m_tlas.Build(m_core.Device(), m_core.CmdList(),
                  m_blas.Resource());
 
-    m_core.EndFrame();
-    m_core.FlushGPU();
+    m_core.SubmitAndFlush();
 
     m_sceneBuilt = true;
     std::println("[App] 가속 구조 빌드 완료");

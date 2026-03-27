@@ -1,45 +1,67 @@
 #include "DXRPipeline.h"
-#include <d3dcompiler.h>
+#include <dxcapi.h>
 #include <print>
-#include <fstream>
 #include <filesystem>
 
 namespace
 {
-    // HLSL 파일을 DXIL로 컴파일 (런타임 컴파일, 개발용)
-    ComPtr<ID3DBlob> CompileShader(const std::filesystem::path& path,
-                                   const char* target)
+    // DXC를 사용한 HLSL lib_6_3 컴파일
+    // D3DCompileFromFile(FXC)은 SM6.x를 지원하지 않으므로 DXC 필수
+    ComPtr<IDxcBlob> CompileShaderDXC(const std::filesystem::path& path)
     {
-        ComPtr<ID3DBlob> code, err;
-        UINT flags = D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES;
-#if defined(_DEBUG)
-        flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-        HRESULT hr = D3DCompileFromFile(
-            path.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
-            "", target, flags, 0, &code, &err);
+        ComPtr<IDxcUtils> utils;
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)),
+                      "DxcUtils 생성 실패");
 
+        ComPtr<IDxcCompiler3> compiler;
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler)),
+                      "DxcCompiler3 생성 실패");
+
+        // 소스 파일 로드
+        ComPtr<IDxcBlobEncoding> sourceBlob;
+        ThrowIfFailed(utils->LoadFile(path.c_str(), nullptr, &sourceBlob),
+                      std::format("셰이더 파일 열기 실패: {}", path.string()));
+
+        DxcBuffer source{};
+        source.Ptr      = sourceBlob->GetBufferPointer();
+        source.Size     = sourceBlob->GetBufferSize();
+        source.Encoding = DXC_CP_UTF8;
+
+        // 컴파일 인수
+        std::vector<LPCWSTR> args = {
+            path.filename().c_str(),
+            L"-T", L"lib_6_3",
+            L"-HV", L"2021",  // HLSL 2021
+#if defined(_DEBUG)
+            L"-Zi",           // 디버그 정보
+            L"-Od",           // 최적화 비활성화
+#else
+            L"-O3",
+#endif
+        };
+
+        ComPtr<IDxcResult> result;
+        ThrowIfFailed(compiler->Compile(
+            &source,
+            args.data(), static_cast<UINT32>(args.size()),
+            nullptr,
+            IID_PPV_ARGS(&result)), "DXC Compile 호출 실패");
+
+        // 컴파일 오류 확인
+        HRESULT hr = S_OK;
+        result->GetStatus(&hr);
         if (FAILED(hr))
         {
-            if (err)
-                std::println("[셰이더 컴파일 오류] {}",
-                             static_cast<const char*>(err->GetBufferPointer()));
+            ComPtr<IDxcBlobUtf8> errors;
+            result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr);
+            if (errors && errors->GetStringLength() > 0)
+                std::println("[DXC 컴파일 오류]\n{}", errors->GetStringPointer());
             ThrowIfFailed(hr, "셰이더 컴파일 실패");
         }
-        return code;
-    }
 
-    // 셰이더 DXIL 파일 읽기
-    std::vector<uint8_t> ReadBinaryFile(const std::filesystem::path& path)
-    {
-        std::ifstream f(path, std::ios::binary | std::ios::ate);
-        if (!f.is_open())
-            throw std::runtime_error(std::format("파일 열기 실패: {}", path.string()));
-        const auto size = f.tellg();
-        f.seekg(0);
-        std::vector<uint8_t> data(static_cast<size_t>(size));
-        f.read(reinterpret_cast<char*>(data.data()), size);
-        return data;
+        ComPtr<IDxcBlob> dxilBlob;
+        result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&dxilBlob), nullptr);
+        return dxilBlob;
     }
 }
 
@@ -49,7 +71,6 @@ namespace
 // ---------------------------------------------------------------
 ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
 {
-    // 디스크립터 테이블: u0 (UAV) + t0 (SRV)
     D3D12_DESCRIPTOR_RANGE1 ranges[2]{};
 
     ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
@@ -57,12 +78,14 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[0].BaseShaderRegister                = 0;
     ranges[0].RegisterSpace                     = 0;
     ranges[0].OffsetInDescriptorsFromTableStart = 0;
+    ranges[0].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     ranges[1].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     ranges[1].NumDescriptors                    = 1;
     ranges[1].BaseShaderRegister                = 0;
     ranges[1].RegisterSpace                     = 0;
     ranges[1].OffsetInDescriptorsFromTableStart = 1;
+    ranges[1].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     D3D12_ROOT_PARAMETER1 param{};
     param.ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -90,10 +113,9 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
 // ---------------------------------------------------------------
 void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig)
 {
-    // 셰이더 컴파일 (lib_6_3 타겟)
-    auto shaderBlob = CompileShader(L"shaders/Raytracing.hlsl", "lib_6_3");
+    // DXC로 lib_6_3 셰이더 컴파일
+    auto dxilBlob = CompileShaderDXC(L"shaders/Raytracing.hlsl");
 
-    // ─── 서브오브젝트 ───────────────────────────────────────────
     // 1. DXIL 라이브러리
     D3D12_EXPORT_DESC exports[] = {
         { L"RayGen",     nullptr, D3D12_EXPORT_FLAG_NONE },
@@ -101,8 +123,7 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
         { L"ClosestHit", nullptr, D3D12_EXPORT_FLAG_NONE },
     };
     D3D12_DXIL_LIBRARY_DESC libDesc{};
-    libDesc.DXILLibrary = { shaderBlob->GetBufferPointer(),
-                            shaderBlob->GetBufferSize() };
+    libDesc.DXILLibrary = { dxilBlob->GetBufferPointer(), dxilBlob->GetBufferSize() };
     libDesc.NumExports  = static_cast<UINT>(std::size(exports));
     libDesc.pExports    = exports;
 
@@ -112,12 +133,12 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
     hitGroup.Type                   = D3D12_HIT_GROUP_TYPE_TRIANGLES;
     hitGroup.ClosestHitShaderImport = L"ClosestHit";
 
-    // 3. 셰이더 설정 (페이로드 = float4 색상, 4바이트 * 4)
+    // 3. 셰이더 설정 (페이로드 = float4 색상)
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig{};
     shaderConfig.MaxPayloadSizeInBytes   = sizeof(float) * 4;
-    shaderConfig.MaxAttributeSizeInBytes = sizeof(float) * 2; // barycentrics
+    shaderConfig.MaxAttributeSizeInBytes = sizeof(float) * 2;
 
-    // 4. 파이프라인 설정 (재귀 없음)
+    // 4. 파이프라인 설정 (재귀 깊이 1)
     D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig{};
     pipelineConfig.MaxTraceRecursionDepth = 1;
 
@@ -125,20 +146,20 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
     D3D12_GLOBAL_ROOT_SIGNATURE globalRS{};
     globalRS.pGlobalRootSignature = globalRootSig;
 
-    // ─── 서브오브젝트 배열 ──────────────────────────────────────
     D3D12_STATE_SUBOBJECT subobjects[5]{};
-    subobjects[0] = { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,         &libDesc        };
-    subobjects[1] = { D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,            &hitGroup       };
-    subobjects[2] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG, &shaderConfig };
-    subobjects[3] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pipelineConfig };
-    subobjects[4] = { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE, &globalRS      };
+    subobjects[0] = { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,              &libDesc        };
+    subobjects[1] = { D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,                 &hitGroup       };
+    subobjects[2] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,  &shaderConfig   };
+    subobjects[3] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG,&pipelineConfig };
+    subobjects[4] = { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,     &globalRS       };
 
     D3D12_STATE_OBJECT_DESC soDesc{};
     soDesc.Type          = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
     soDesc.NumSubobjects = static_cast<UINT>(std::size(subobjects));
     soDesc.pSubobjects   = subobjects;
 
-    ThrowIfFailed(device->CreateStateObject(&soDesc, IID_PPV_ARGS(&m_pso)));
+    ThrowIfFailed(device->CreateStateObject(&soDesc, IID_PPV_ARGS(&m_pso)),
+                  "RTPSO 생성 실패");
     ThrowIfFailed(m_pso.As(&m_psoProps));
 
     std::println("[DXRPipeline] RTPSO 생성 완료");

@@ -32,6 +32,14 @@ void D3D12Core::Shutdown()
     if (m_fenceEvent) CloseHandle(m_fenceEvent);
 }
 
+void D3D12Core::SubmitAndFlush()
+{
+    ThrowIfFailed(m_cmdList->Close());
+    ID3D12CommandList* lists[] = { m_cmdList.Get() };
+    m_cmdQueue->ExecuteCommandLists(1, lists);
+    FlushGPU();
+}
+
 void D3D12Core::CreateDevice()
 {
 #if defined(_DEBUG)

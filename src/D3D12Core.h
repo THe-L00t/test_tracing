@@ -13,11 +13,15 @@ public:
     void BeginFrame();
     void EndFrame();
 
+    // 커맨드 리스트 제출 후 GPU 완전 대기 (Present 없음, 초기화용)
+    void SubmitAndFlush();
+
     // GPU 완전 대기
     void FlushGPU();
 
     // 접근자
     ID3D12Device5*              Device()       const noexcept { return m_device.Get(); }
+    ID3D12CommandAllocator*     CmdAlloc(uint32_t i) const noexcept { return m_cmdAlloc[i].Get(); }
     ID3D12GraphicsCommandList4* CmdList()      const noexcept { return m_cmdList.Get(); }
     ID3D12CommandQueue*         CmdQueue()     const noexcept { return m_cmdQueue.Get(); }
     IDXGISwapChain3*            SwapChain()    const noexcept { return m_swapChain.Get(); }
