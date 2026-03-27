@@ -93,6 +93,12 @@ void App::OnRender()
 
     cmd->DispatchRays(&dispatchDesc);
 
+    // UAV 쓰기 완료 보장 (DispatchRays → CopyResource 순서 강제)
+    D3D12_RESOURCE_BARRIER uavBarrier{};
+    uavBarrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBarrier.UAV.pResource = m_renderTarget.Resource();
+    cmd->ResourceBarrier(1, &uavBarrier);
+
     // 결과를 백버퍼로 복사 후 Present
     m_renderTarget.CopyToBackBuffer(cmd, m_core.BackBuffer());
 
