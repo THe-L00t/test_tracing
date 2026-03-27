@@ -80,7 +80,13 @@ void D3D12Core::CreateDevice()
             {
                 DXGI_ADAPTER_DESC1 desc{};
                 adapter->GetDesc1(&desc);
-                wprintf(L"[D3D12Core] 어댑터: %s\n", desc.Description);
+                // wprintf는 narrow-mode stdout과 혼용 불가 → UTF-8 변환 후 출력
+                int len = WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1,
+                                             nullptr, 0, nullptr, nullptr);
+                std::string adapterName(static_cast<size_t>(len), '\0');
+                WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1,
+                                    adapterName.data(), len, nullptr, nullptr);
+                std::println("[D3D12Core] 어댑터: {}", adapterName);
                 return;
             }
             m_device.Reset();

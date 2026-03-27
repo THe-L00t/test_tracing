@@ -35,9 +35,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nCmdShow)
     FILE* dummy;
     freopen_s(&dummy, "CONOUT$", "w", stdout);
     freopen_s(&dummy, "CONOUT$", "w", stderr);
-    // 버퍼링 없이 즉시 출력
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
+    SetConsoleOutputCP(CP_UTF8);  // UTF-8 출력 (한국어 깨짐 방지)
 #endif
 
     const wchar_t k_className[] = L"DXRWindowClass";
