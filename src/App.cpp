@@ -139,11 +139,29 @@ static void MakeTranslateTransform(float out[3][4], float tx, float ty, float tz
     out[2][3] = tz;
 }
 
+// 스케일 + 이동: worldPos = scale*localPos + translate
+// 큐브 BLAS는 [-0.5,0.5]^3이므로 center = translate 위치, 크기 = scale
+static void MakeScaleTranslateTransform(float out[3][4],
+    float sx, float sy, float sz,
+    float tx, float ty, float tz)
+{
+    out[0][0] = sx;   out[0][1] = 0.0f; out[0][2] = 0.0f; out[0][3] = tx;
+    out[1][0] = 0.0f; out[1][1] = sy;   out[1][2] = 0.0f; out[1][3] = ty;
+    out[2][0] = 0.0f; out[2][1] = 0.0f; out[2][2] = sz;   out[2][3] = tz;
+}
+
+// InstanceID 인코딩: 하위4비트=geomType(0=plane,1=cube,2=room), 상위비트=matIdx
+static constexpr uint32_t EncodeID(uint32_t geom, uint32_t mat)
+{
+    return geom | (mat << 4);
+}
+
 // ---------------------------------------------------------------
 // App::Init
 // ---------------------------------------------------------------
 void App::Init(HWND hwnd, uint32_t width, uint32_t height)
 {
+    m_hwnd   = hwnd;
     m_width  = width;
     m_height = height;
 
@@ -193,11 +211,11 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
         TLASInstance instances[2]{};
         MakeIdentityTransform(instances[0].transform);
         instances[0].blasResource = m_planeBLAS.Resource();
-        instances[0].instanceID   = 0;
+        instances[0].instanceID   = EncodeID(0, 0); // plane, mat0 (초록 바닥)
 
         MakeTranslateTransform(instances[1].transform, 0.0f, 0.5f, 3.0f);
         instances[1].blasResource = m_cubeBLAS.Resource();
-        instances[1].instanceID   = 1;
+        instances[1].instanceID   = EncodeID(1, 1); // cube, mat1 (빨간 메탈릭)
 
         m_tlas.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ instances });
@@ -238,11 +256,12 @@ void App::BuildBLASes()
 
 // ---------------------------------------------------------------
 // 디스크립터 힙 구성
-// 슬롯 0: UAV (렌더 타겟)
-// 슬롯 1: SRV (TLAS)
-// 슬롯 2: SRV (plane VB, StructuredBuffer<VertexPN>)
-// 슬롯 3: SRV (cube VB)
-// 슬롯 4: SRV (room VB)
+// 슬롯 0: UAV u0 (g_output,       RGBA8   – RenderTarget::Init 내부)
+// 슬롯 1: UAV u1 (g_accumulation, RGBA32F – RenderTarget::Init 내부)
+// 슬롯 2: SRV t0 (TLAS)
+// 슬롯 3: SRV t1 (plane VB)
+// 슬롯 4: SRV t2 (cube VB)
+// 슬롯 5: SRV t3 (room VB)
 // ---------------------------------------------------------------
 void App::BuildDescriptors()
 {
@@ -252,11 +271,11 @@ void App::BuildDescriptors()
     // 슬롯 0: UAV (렌더 타겟)
     m_renderTarget.Init(device, heap, m_width, m_height);
 
-    // 슬롯 1: SRV (TLAS)
+    // 슬롯 2: SRV (TLAS)  ← 슬롯 0,1은 RenderTarget::Init에서 UAV로 사용
     m_tlasSRV = heap.Allocate();
     RebuildTLASSRV();
 
-    // 슬롯 2: SRV (plane VB)
+    // 슬롯 3: SRV (plane VB)
     m_planeVbSRV = heap.Allocate();
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -269,7 +288,7 @@ void App::BuildDescriptors()
         device->CreateShaderResourceView(m_planeBLAS.VertexBuffer(), &srvDesc, m_planeVbSRV.cpu);
     }
 
-    // 슬롯 3: SRV (cube VB)
+    // 슬롯 4: SRV (cube VB)
     m_cubeVbSRV = heap.Allocate();
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -282,7 +301,7 @@ void App::BuildDescriptors()
         device->CreateShaderResourceView(m_cubeBLAS.VertexBuffer(), &srvDesc, m_cubeVbSRV.cpu);
     }
 
-    // 슬롯 4: SRV (room VB)
+    // 슬롯 5: SRV (room VB)
     m_roomVbSRV = heap.Allocate();
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -315,6 +334,8 @@ void App::SwitchScene(uint32_t id)
 {
     if (id == m_sceneID) return;
     m_sceneID = id;
+    m_frameCount  = 0;
+    m_cameraMoved = true;
 
     // GPU 완전 대기
     m_core.FlushGPU();
@@ -332,11 +353,45 @@ void App::SwitchScene(uint32_t id)
         TLASInstance instances[2]{};
         MakeIdentityTransform(instances[0].transform);
         instances[0].blasResource = m_planeBLAS.Resource();
-        instances[0].instanceID   = 0;
+        instances[0].instanceID   = EncodeID(0, 0); // plane, mat0
 
         MakeTranslateTransform(instances[1].transform, 0.0f, 0.5f, 3.0f);
         instances[1].blasResource = m_cubeBLAS.Resource();
-        instances[1].instanceID   = 1;
+        instances[1].instanceID   = EncodeID(1, 1); // cube, mat1
+
+        m_tlas.Build(m_core.Device(), m_core.CmdList(),
+                     std::span{ instances });
+    }
+    else if (m_sceneID == 2)
+    {
+        // 씬 2 (PBR 쇼케이스): 방 + 큐브 3개 + 컬러 라이트 2개
+        std::println("[App] 씬 2 (PBR 쇼케이스) 전환");
+        m_camera.Init(0.0f, 2.0f, -2.5f, 0.0f, 0.1f); // 살짝 아래 시점
+
+        TLASInstance instances[4]{};
+
+        // 방 (mat0 = 흰색 벽)
+        MakeIdentityTransform(instances[0].transform);
+        instances[0].blasResource = m_roomBLAS.Resource();
+        instances[0].instanceID   = EncodeID(2, 0);
+
+        // 골드 메탈릭 큐브 – 왼쪽 세로로 긴 기둥
+        MakeScaleTranslateTransform(instances[1].transform,
+            0.8f, 2.2f, 0.8f, -1.5f, 1.1f, 0.8f);
+        instances[1].blasResource = m_cubeBLAS.Resource();
+        instances[1].instanceID   = EncodeID(1, 1); // cube, mat1
+
+        // 테라코타 무광 큐브 – 정면 납작하게
+        MakeScaleTranslateTransform(instances[2].transform,
+            2.0f, 0.55f, 1.1f, 0.3f, 0.275f, 1.5f);
+        instances[2].blasResource = m_cubeBLAS.Resource();
+        instances[2].instanceID   = EncodeID(1, 2); // cube, mat2
+
+        // 구리 메탈릭 큐브 – 오른쪽 중간 크기
+        MakeScaleTranslateTransform(instances[3].transform,
+            0.7f, 0.7f, 0.7f, 1.8f, 0.35f, 0.0f);
+        instances[3].blasResource = m_cubeBLAS.Resource();
+        instances[3].instanceID   = EncodeID(1, 3); // cube, mat3
 
         m_tlas.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ instances });
@@ -350,11 +405,11 @@ void App::SwitchScene(uint32_t id)
         TLASInstance instances[2]{};
         MakeIdentityTransform(instances[0].transform);
         instances[0].blasResource = m_roomBLAS.Resource();
-        instances[0].instanceID   = 2;
+        instances[0].instanceID   = EncodeID(2, 2); // room, mat2 (흰색 벽)
 
         MakeTranslateTransform(instances[1].transform, 0.0f, 0.5f, 0.5f);
         instances[1].blasResource = m_cubeBLAS.Resource();
-        instances[1].instanceID   = 3;
+        instances[1].instanceID   = EncodeID(1, 3); // cube, mat3 (파란 매트)
 
         m_tlas.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ instances });
@@ -377,25 +432,92 @@ void App::ProcessInput(float dt)
     const float move = k_moveSpeed * dt;
     const float rot  = k_rotSpeed  * dt;
 
+    // 카메라 변경 여부 추적 (이동/회전 시 누적 초기화)
+    bool moved = false;
+
     // 전진/후진
-    if (GetAsyncKeyState('W') & 0x8000) m_camera.MoveForward( move);
-    if (GetAsyncKeyState('S') & 0x8000) m_camera.MoveForward(-move);
+    if (GetAsyncKeyState('W') & 0x8000) { m_camera.MoveForward( move); moved = true; }
+    if (GetAsyncKeyState('S') & 0x8000) { m_camera.MoveForward(-move); moved = true; }
 
     // 좌/우 스트레이프
-    if (GetAsyncKeyState('A') & 0x8000) m_camera.MoveRight(-move);
-    if (GetAsyncKeyState('D') & 0x8000) m_camera.MoveRight( move);
+    if (GetAsyncKeyState('A') & 0x8000) { m_camera.MoveRight(-move); moved = true; }
+    if (GetAsyncKeyState('D') & 0x8000) { m_camera.MoveRight( move); moved = true; }
 
     // 상/하 이동 (월드 Y)
-    if (GetAsyncKeyState('Q') & 0x8000) m_camera.MoveUp( move);
-    if (GetAsyncKeyState('E') & 0x8000) m_camera.MoveUp(-move);
+    if (GetAsyncKeyState('Q') & 0x8000) { m_camera.MoveUp( move); moved = true; }
+    if (GetAsyncKeyState('E') & 0x8000) { m_camera.MoveUp(-move); moved = true; }
 
     // 피치 (I=올려다보기, K=내려다보기)
-    if (GetAsyncKeyState('I') & 0x8000) m_camera.AddPitch(-rot);
-    if (GetAsyncKeyState('K') & 0x8000) m_camera.AddPitch( rot);
+    if (GetAsyncKeyState('I') & 0x8000) { m_camera.AddPitch(-rot); moved = true; }
+    if (GetAsyncKeyState('K') & 0x8000) { m_camera.AddPitch( rot); moved = true; }
 
     // 요 (J=왼쪽, L=오른쪽)
-    if (GetAsyncKeyState('J') & 0x8000) m_camera.AddYaw(-rot);
-    if (GetAsyncKeyState('L') & 0x8000) m_camera.AddYaw( rot);
+    if (GetAsyncKeyState('J') & 0x8000) { m_camera.AddYaw(-rot); moved = true; }
+    if (GetAsyncKeyState('L') & 0x8000) { m_camera.AddYaw( rot); moved = true; }
+
+    // 마우스 델타 처리 (캡처 중일 때 센터 락)
+    if (m_mouseCaptured)
+    {
+        POINT center = { static_cast<LONG>(m_width / 2), static_cast<LONG>(m_height / 2) };
+        POINT screenCenter = center;
+        ClientToScreen(m_hwnd, &screenCenter);
+
+        POINT cur;
+        GetCursorPos(&cur);
+        int dx = cur.x - screenCenter.x;
+        int dy = cur.y - screenCenter.y;
+
+        if (dx != 0 || dy != 0)
+        {
+            constexpr float k_sensitivity = 0.002f;
+            m_camera.AddYaw(  static_cast<float>(dx) * k_sensitivity);
+            m_camera.AddPitch(static_cast<float>(dy) * k_sensitivity);
+            moved = true;
+            SetCursorPos(screenCenter.x, screenCenter.y);
+        }
+    }
+
+    if (moved) m_cameraMoved = true;
+}
+
+// ---------------------------------------------------------------
+// 마우스 캡처 토글 (좌클릭)
+// ---------------------------------------------------------------
+void App::ToggleMouseCapture()
+{
+    if (!m_mouseCaptured)
+    {
+        // 캡처 시작: 커서 숨기고 클라이언트 영역에 가두기
+        m_mouseCaptured = true;
+        ShowCursor(FALSE);
+
+        RECT clientRect;
+        GetClientRect(m_hwnd, &clientRect);
+        MapWindowPoints(m_hwnd, nullptr, reinterpret_cast<POINT*>(&clientRect), 2);
+        ClipCursor(&clientRect);
+
+        // 커서를 창 중앙으로 이동 (첫 프레임 점프 방지)
+        POINT center = { static_cast<LONG>(m_width / 2), static_cast<LONG>(m_height / 2) };
+        ClientToScreen(m_hwnd, &center);
+        SetCursorPos(center.x, center.y);
+    }
+    else
+    {
+        ReleaseMouseCapture();
+    }
+}
+
+// ---------------------------------------------------------------
+// 마우스 캡처 해제 (ESC / 포커스 이탈)
+// ---------------------------------------------------------------
+void App::ReleaseMouseCapture()
+{
+    if (m_mouseCaptured)
+    {
+        m_mouseCaptured = false;
+        ClipCursor(nullptr);
+        ShowCursor(TRUE);
+    }
 }
 
 // ---------------------------------------------------------------
@@ -424,59 +546,81 @@ void App::UpdateSceneCB()
 
     if (m_sceneID == 0)
     {
-        // Scene 0 (야외): 태양 방향광 (방향 벡터를 위치 대신 저장)
-        // 방향광이므로 lightPos에 정규화된 방향 저장
+        // ── 씬 0 (야외): 태양 방향광 ──
         float sx = 1.0f, sy = 2.0f, sz = -0.5f;
         float slen = sqrtf(sx*sx + sy*sy + sz*sz);
-        cb.lightPos[0]     = sx / slen;
-        cb.lightPos[1]     = sy / slen;
-        cb.lightPos[2]     = sz / slen;
-        cb.lightRadius     = 0.0f;
-        cb.lightColor[0]   = 1.0f;
-        cb.lightColor[1]   = 0.95f;
-        cb.lightColor[2]   = 0.8f;
-        cb.lightIntensity  = 3.0f;
+        cb.lightPos[0] = sx/slen; cb.lightPos[1] = sy/slen; cb.lightPos[2] = sz/slen;
+        cb.lightIntensity = 3.0f;
+        cb.lightColor[0] = 1.0f; cb.lightColor[1] = 1.0f; cb.lightColor[2] = 1.0f;
+
+        // mat0: 초록 바닥
+        cb.matAlbedoRoughness[0][0]=0.15f; cb.matAlbedoRoughness[0][1]=0.60f;
+        cb.matAlbedoRoughness[0][2]=0.10f; cb.matAlbedoRoughness[0][3]=0.85f;
+        cb.matMetallic[0] = 0.0f;
+        // mat1: 빨간 메탈릭 큐브
+        cb.matAlbedoRoughness[1][0]=0.80f; cb.matAlbedoRoughness[1][1]=0.05f;
+        cb.matAlbedoRoughness[1][2]=0.05f; cb.matAlbedoRoughness[1][3]=0.05f;
+        cb.matMetallic[1] = 0.95f;
+    }
+    else if (m_sceneID == 1)
+    {
+        // ── 씬 1 (실내): 포인트 라이트 1개 ──
+        cb.lightPos[0]=0.0f; cb.lightPos[1]=3.8f; cb.lightPos[2]=0.0f;
+        cb.lightIntensity=8.0f;  // dist≈4m → atten=8/16=0.5, 적정 밝기
+        cb.lightColor[0]=1.0f; cb.lightColor[1]=1.0f; cb.lightColor[2]=1.0f;
+
+        // mat2: 흰색 벽
+        cb.matAlbedoRoughness[2][0]=0.85f; cb.matAlbedoRoughness[2][1]=0.85f;
+        cb.matAlbedoRoughness[2][2]=0.85f; cb.matAlbedoRoughness[2][3]=0.90f;
+        cb.matMetallic[2] = 0.0f;
+        // mat3: 파란 매트 큐브
+        cb.matAlbedoRoughness[3][0]=0.10f; cb.matAlbedoRoughness[3][1]=0.15f;
+        cb.matAlbedoRoughness[3][2]=0.80f; cb.matAlbedoRoughness[3][3]=0.95f;
+        cb.matMetallic[3] = 0.0f;
     }
     else
     {
-        // Scene 1 (실내): 포인트 라이트
-        cb.lightPos[0]    = 0.0f;
-        cb.lightPos[1]    = 3.8f;
-        cb.lightPos[2]    = 0.0f;
-        cb.lightRadius    = 0.0f;
-        cb.lightColor[0]  = 1.0f;
-        cb.lightColor[1]  = 1.0f;
-        cb.lightColor[2]  = 1.0f;
-        cb.lightIntensity = 15.0f;
+        // ── 씬 2 (PBR 쇼케이스): 컬러 포인트 라이트 2개 ──
+        // 역제곱 법칙 기준: dist≈4m에서 atten = I/dist² 가 0.4~0.5가 되도록 I≈7
+        // Light 1: 워밍 앰버 – 왼쪽 위
+        cb.lightPos[0]=-2.0f; cb.lightPos[1]=3.6f; cb.lightPos[2]=0.0f;
+        cb.lightIntensity=7.0f;
+        cb.lightColor[0]=1.0f; cb.lightColor[1]=1.0f; cb.lightColor[2]=1.0f;
+
+        // Light 2: 흰색 – 오른쪽 위
+        cb.light2Pos[0]=2.0f; cb.light2Pos[1]=3.6f; cb.light2Pos[2]=-1.5f;
+        cb.light2Intensity=5.5f;
+        cb.light2Color[0]=1.0f; cb.light2Color[1]=1.0f; cb.light2Color[2]=1.0f;
+
+        // mat0: 방 벽/바닥/천장 – 파란색 채도 50% (HSL 240° S=50% L=50% → RGB 0.25,0.25,0.75)
+        cb.matAlbedoRoughness[0][0]=0.25f; cb.matAlbedoRoughness[0][1]=0.25f;
+        cb.matAlbedoRoughness[0][2]=0.75f; cb.matAlbedoRoughness[0][3]=0.92f;
+        cb.matMetallic[0] = 0.0f;
+
+        // mat1: 골드 메탈릭 (물리 기반 금색)
+        cb.matAlbedoRoughness[1][0]=1.00f; cb.matAlbedoRoughness[1][1]=0.71f;
+        cb.matAlbedoRoughness[1][2]=0.29f; cb.matAlbedoRoughness[1][3]=0.12f;
+        cb.matMetallic[1] = 1.0f;
+
+        // mat2: 매트 빨간색
+        cb.matAlbedoRoughness[2][0]=0.90f; cb.matAlbedoRoughness[2][1]=0.05f;
+        cb.matAlbedoRoughness[2][2]=0.05f; cb.matAlbedoRoughness[2][3]=0.95f;
+        cb.matMetallic[2] = 0.0f;
+        cb.matEmissive[2] = 0.0f;
+
+        // mat3: 발광체 – 초록 계열 (emissive green)
+        cb.matAlbedoRoughness[3][0]=0.10f; cb.matAlbedoRoughness[3][1]=0.90f;
+        cb.matAlbedoRoughness[3][2]=0.20f; cb.matAlbedoRoughness[3][3]=0.90f;
+        cb.matMetallic[3] = 0.0f;
+        cb.matEmissive[3] = 4.0f;  // albedo × 4.0 방출
+
+        cb.matEmissive[0] = 0.0f;
+        cb.matEmissive[1] = 0.0f;
     }
 
-    // 재질 0: 초록 바닥 (albedo=(0.15,0.6,0.1), roughness=0.85, metallic=0)
-    cb.matAlbedoRoughness[0][0] = 0.15f;
-    cb.matAlbedoRoughness[0][1] = 0.60f;
-    cb.matAlbedoRoughness[0][2] = 0.10f;
-    cb.matAlbedoRoughness[0][3] = 0.85f;
-    cb.matMetallic[0][0] = 0.0f;
-
-    // 재질 1: 빨간 메탈릭 큐브 (albedo=(0.8,0.05,0.05), roughness=0.05, metallic=0.95)
-    cb.matAlbedoRoughness[1][0] = 0.80f;
-    cb.matAlbedoRoughness[1][1] = 0.05f;
-    cb.matAlbedoRoughness[1][2] = 0.05f;
-    cb.matAlbedoRoughness[1][3] = 0.05f;
-    cb.matMetallic[1][0] = 0.95f;
-
-    // 재질 2: 흰색 벽 (albedo=(0.85,0.85,0.85), roughness=0.9, metallic=0)
-    cb.matAlbedoRoughness[2][0] = 0.85f;
-    cb.matAlbedoRoughness[2][1] = 0.85f;
-    cb.matAlbedoRoughness[2][2] = 0.85f;
-    cb.matAlbedoRoughness[2][3] = 0.90f;
-    cb.matMetallic[2][0] = 0.0f;
-
-    // 재질 3: 파란 매트 큐브 (albedo=(0.1,0.15,0.8), roughness=0.95, metallic=0)
-    cb.matAlbedoRoughness[3][0] = 0.10f;
-    cb.matAlbedoRoughness[3][1] = 0.15f;
-    cb.matAlbedoRoughness[3][2] = 0.80f;
-    cb.matAlbedoRoughness[3][3] = 0.95f;
-    cb.matMetallic[3][0] = 0.0f;
+    // 패스 트레이싱 누적 파라미터
+    cb.frameCount  = m_frameCount;
+    cb.randomSeed  = m_frameCount;  // 프레임마다 달라지는 시드
 
     // 업로드 버퍼에 직접 기록
     void* mapped = nullptr;
@@ -493,6 +637,7 @@ void App::OnKeyDown(uint32_t key)
 {
     if (key == '1') SwitchScene(0);
     else if (key == '2') SwitchScene(1);
+    else if (key == '3') SwitchScene(2);
 }
 
 // ---------------------------------------------------------------
@@ -503,6 +648,18 @@ void App::OnRender()
     constexpr float k_dt = 0.016f;  // 고정 델타타임
 
     ProcessInput(k_dt);
+
+    // 카메라 이동 시 누적 초기화, 정지 시 프레임 누적
+    if (m_cameraMoved)
+    {
+        m_frameCount  = 0;
+        m_cameraMoved = false;
+    }
+    else
+    {
+        m_frameCount++;
+    }
+
     UpdateSceneCB();
 
     m_core.BeginFrame();
@@ -534,11 +691,8 @@ void App::OnRender()
 
     cmd->DispatchRays(&dispatchDesc);
 
-    // UAV 쓰기 완료 보장 (DispatchRays → CopyResource 순서 강제)
-    D3D12_RESOURCE_BARRIER uavBarrier{};
-    uavBarrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    uavBarrier.UAV.pResource = m_renderTarget.Resource();
-    cmd->ResourceBarrier(1, &uavBarrier);
+    // UAV 쓰기 완료 보장 (g_output + g_accumulation 모두 배리어)
+    m_renderTarget.UAVBarriers(cmd);
 
     // 결과를 백버퍼로 복사 후 Present
     m_renderTarget.CopyToBackBuffer(cmd, m_core.BackBuffer());

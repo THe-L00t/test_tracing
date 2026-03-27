@@ -75,18 +75,35 @@ struct VertexPN
 };
 
 // 씬 상수 버퍼 (256바이트, 16바이트 정렬)
+// InstanceID 인코딩: 하위4비트=geomType(0=plane,1=cube,2=room), 상위비트=matIdx
 struct alignas(16) SceneCB
 {
-    float    camPos[3];      uint32_t sceneID;        // 16
-    float    camRight[3];    float    tanHalfFovY;     // 16
-    float    camUp[3];       float    aspectRatio;     // 16
-    float    camForward[3];  float    _pad0;           // 16
-    float    lightPos[3];    float    lightRadius;     // 16
-    float    lightColor[3];  float    lightIntensity;  // 16
-    // 4개 재질 × (float4 albedoRoughness + float4 metallic)
-    float    matAlbedoRoughness[4][4]; // [mat][0..3] = albedo.xyz + roughness  (64)
-    float    matMetallic[4][4];        // [mat][0] = metallic                   (64)
-    // 96 + 128 = 224, 256까지 패딩
-    float    _fill[8];
+    // 카메라 (64)
+    float    camPos[3];       uint32_t sceneID;
+    float    camRight[3];     float    tanHalfFovY;
+    float    camUp[3];        float    aspectRatio;
+    float    camForward[3];   float    _pad0;
+
+    // 광원 1 (32)
+    float    lightPos[3];     float    lightRadius;
+    float    lightColor[3];   float    lightIntensity;
+
+    // 광원 2 – 씬2 전용 (32)
+    float    light2Pos[3];    float    light2Radius;
+    float    light2Color[3];  float    light2Intensity;
+
+    // 재질 4개 (albedo.xyz + roughness) (64)
+    float    matAlbedoRoughness[4][4];
+
+    // 재질 4개의 metallic을 float4 하나로 압축 (16)
+    float    matMetallic[4];
+    // 발광 강도 per 재질 (0=비발광, >0이면 albedo×강도 방출) (16)
+    float    matEmissive[4];
+
+    // 패스 트레이싱 (32)
+    uint32_t frameCount;
+    uint32_t randomSeed;
+    float    _fill[6];
 };
+// 검증: 64+32+32+64+16+16+4+4+24 = 256
 static_assert(sizeof(SceneCB) == 256, "SceneCB must be 256 bytes");

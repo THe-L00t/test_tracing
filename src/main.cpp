@@ -20,10 +20,25 @@ namespace
             return 0;
 
         case WM_KEYDOWN:
-            // 씬 전환 키 (1/2) 처리
             g_app.OnKeyDown(static_cast<uint32_t>(wp));
             if (wp == VK_ESCAPE)
-                DestroyWindow(hwnd);
+            {
+                // 마우스 캡처 중이면 해제, 아니면 창 닫기
+                if (g_app.IsMouseCaptured())
+                    g_app.ReleaseMouseCapture();
+                else
+                    DestroyWindow(hwnd);
+            }
+            return 0;
+
+        case WM_LBUTTONDOWN:
+            // 좌클릭으로 마우스 캡처 토글 (FPS 모드)
+            g_app.ToggleMouseCapture();
+            return 0;
+
+        case WM_KILLFOCUS:
+            // 창이 포커스를 잃으면 캡처 자동 해제
+            g_app.ReleaseMouseCapture();
             return 0;
         }
         return DefWindowProcW(hwnd, msg, wp, lp);
@@ -59,7 +74,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nCmdShow)
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
 
     HWND hwnd = CreateWindowExW(
-        0, k_className, L"DXR Ray Tracer - [1] Outdoor  [2] Indoor",
+        0, k_className, L"DXR Path Tracer - [1] Outdoor  [2] Indoor  [3] PBR Showcase",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rect.right - rect.left, rect.bottom - rect.top,

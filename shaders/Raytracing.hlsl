@@ -1,65 +1,183 @@
 // ──────────────────────────────────────────────────────────────
-//  Raytracing.hlsl
-//  DXR 레이트레이싱 셰이더
-//  씬 0 (야외): 하늘 그라데이션 + 태양광 + 반사
-//  씬 1 (실내): 포인트 라이트 + 그림자
+//  Raytracing.hlsl  –  Path Tracing (iterative bounce)
+//
+//  씬 0 (야외):  평면 바닥 + 금속 큐브, 태양 방향광
+//  씬 1 (실내):  박스 룸 + 매트 큐브, 포인트 라이트 1개
+//  씬 2 (쇼케이스): 박스 룸 + PBR 큐브 3개, 컬러 포인트 라이트 2개
+//
+//  InstanceID 인코딩:
+//    하위 4비트 = geomType (0=plane, 1=cube, 2=room)
+//    상위 비트  = matIdx   (0..3)
 // ──────────────────────────────────────────────────────────────
 
-// ──────────────────────────────────────────────────────────────
-//  리소스 바인딩 (글로벌 루트 시그니처)
-// ──────────────────────────────────────────────────────────────
+// ── 리소스 ──────────────────────────────────────────────────────
+RWTexture2D<float4>             g_output       : register(u0);
+RWTexture2D<float4>             g_accumulation : register(u1);
+RaytracingAccelerationStructure g_tlas         : register(t0);
 
-// 파라미터 0: 디스크립터 테이블
-RWTexture2D<float4>                 g_output : register(u0);        // 출력 UAV
-RaytracingAccelerationStructure     g_tlas   : register(t0);        // TLAS SRV
-
-// 정점 버퍼 (StructuredBuffer<VertexPN>, stride=24)
 struct VertexPN { float3 pos; float3 normal; };
-StructuredBuffer<VertexPN> g_vbPlane : register(t1);   // 평면 정점 버퍼
-StructuredBuffer<VertexPN> g_vbCube  : register(t2);   // 큐브 정점 버퍼
-StructuredBuffer<VertexPN> g_vbRoom  : register(t3);   // 방 정점 버퍼
+StructuredBuffer<VertexPN> g_vbPlane : register(t1);
+StructuredBuffer<VertexPN> g_vbCube  : register(t2);
+StructuredBuffer<VertexPN> g_vbRoom  : register(t3);
 
-// 파라미터 1: 인라인 루트 CBV (씬 상수)
 cbuffer SceneConstants : register(b0)
 {
-    float3 camPos;      uint   sceneID;
-    float3 camRight;    float  tanHalfFovY;
-    float3 camUp;       float  aspectRatio;
-    float3 camForward;  float  _pad0;
-    float3 lightPos;    float  lightRadius;
-    float3 lightColor;  float  lightIntensity;
-    float4 matAlbedoRoughness[4];  // .xyz=albedo .w=roughness
-    float4 matMetallic[4];         // .x=metallic
+    float3 camPos;       uint   sceneID;
+    float3 camRight;     float  tanHalfFovY;
+    float3 camUp;        float  aspectRatio;
+    float3 camForward;   float  _pad0;
+
+    float3 lightPos;     float  lightRadius;
+    float3 lightColor;   float  lightIntensity;
+    float3 light2Pos;    float  light2Radius;
+    float3 light2Color;  float  light2Intensity;
+
+    float4 matAlbedoRoughness[4];   // .xyz=albedo  .w=roughness
+    float4 matMetallic;             // .xyzw = metallic for mat 0,1,2,3
+    float4 matEmissive;             // .xyzw = emission intensity (0=off, >0 → albedo×intensity)
+
+    uint   frameCount;  uint   randomSeed;  uint2  _cbPad;
 };
 
-// ──────────────────────────────────────────────────────────────
-//  페이로드 정의
-// ──────────────────────────────────────────────────────────────
+// ── 페이로드 ────────────────────────────────────────────────────
 struct RayPayload
 {
-    float3 color;
-    uint   depth;
+    float3 emission;        // NEE 직접광 + 미스 방사
+    float3 attenuation;     // BRDF 처리량 가중치
+    float3 nextOrigin;
+    float3 nextDirection;
+    uint   seed;            // RNG 상태 (입출력)
+    uint   depth;           // 현재 바운스 (입력)
+    uint   terminated;      // 1 = 경로 종료
 };
+// 60 bytes
 
-struct ShadowPayload
+struct ShadowPayload { float vis; };
+
+// ── RNG (Wang Hash) ─────────────────────────────────────────────
+uint WangHash(uint s)
 {
-    float vis;   // 1.0 = 빛 도달 (그림자 없음), 0.0 = 차단됨
-};
+    s = (s ^ 61u) ^ (s >> 16u);
+    s *= 9u;
+    s ^= s >> 4u;
+    s *= 0x27d4eb2du;
+    s ^= s >> 15u;
+    return s;
+}
+float RandFloat(inout uint s)
+{
+    s = WangHash(s);
+    return float(s & 0x00FFFFFFu) / float(0x01000000u);
+}
 
-// ──────────────────────────────────────────────────────────────
-//  RayGen 셰이더 – 핀홀 카메라
-// ──────────────────────────────────────────────────────────────
+// ── ONB (법선 기반 접선 공간) ────────────────────────────────────
+void BuildONB(float3 N, out float3 T, out float3 B)
+{
+    if (abs(N.x) > 0.9f)
+        T = normalize(cross(float3(0.0f, 1.0f, 0.0f), N));
+    else
+        T = normalize(cross(float3(1.0f, 0.0f, 0.0f), N));
+    B = cross(N, T);
+}
+
+// ── 코사인 가중 반구 샘플링 ──────────────────────────────────────
+// Lambertian: BRDF/pdf = albedo (cosTheta 약분)
+float3 CosineSampleHemisphere(float2 u, float3 N)
+{
+    float r   = sqrt(u.x);
+    float phi = 6.28318530718f * u.y;
+    float lx  = r * cos(phi);
+    float lz  = r * sin(phi);
+    float ly  = sqrt(max(0.0f, 1.0f - u.x));
+    float3 T, B;
+    BuildONB(N, T, B);
+    return normalize(T * lx + N * ly + B * lz);
+}
+
+// ── 그림자 가시성 ────────────────────────────────────────────────
+float ShadowVis(float3 origin, float3 dir, float tmax)
+{
+    ShadowPayload sp = { 0.0f };
+    RayDesc sr;
+    sr.Origin    = origin;
+    sr.Direction = dir;
+    sr.TMin      = 0.001f;
+    sr.TMax      = tmax;
+    TraceRay(g_tlas,
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+        RAY_FLAG_SKIP_CLOSEST_HIT_SHADER         |
+        RAY_FLAG_FORCE_OPAQUE,
+        0xFF, 0, 1, 1, sr, sp);
+    return sp.vis;
+}
+
+// ── NEE 직접광 ──────────────────────────────────────────────────
+float3 DirectLighting(float3 hitPos, float3 N, float3 albedo, float metallic)
+{
+    float3 diffAlbedo = albedo * (1.0f - metallic);
+    float3 result     = float3(0.0f, 0.0f, 0.0f);
+
+    if (sceneID == 0)
+    {
+        // 씬 0: 태양 방향광
+        float3 sunDir   = normalize(float3(1.0f, 2.0f, -0.5f));
+        float3 sunColor = float3(1.0f, 1.0f, 1.0f) * 3.0f;
+        float  NdotL    = max(0.0f, dot(N, sunDir));
+        float  vis      = ShadowVis(hitPos + N * 0.001f, sunDir, 1e6f);
+        result = diffAlbedo * NdotL * sunColor * vis;
+    }
+    else if (sceneID == 1)
+    {
+        // 씬 1: 포인트 라이트 1개 (역제곱 감쇠)
+        float3 toL   = lightPos - hitPos;
+        float  dist  = max(length(toL), 0.01f);
+        float3 L     = toL / dist;
+        float  NdotL = max(0.0f, dot(N, L));
+        float  atten = lightIntensity / (dist * dist);   // 물리 기반 역제곱
+        float  vis   = ShadowVis(hitPos + N * 0.001f, L, dist - 0.01f);
+        result = diffAlbedo * NdotL * lightColor * atten * vis;
+    }
+    else
+    {
+        // 씬 2: 컬러 포인트 라이트 2개 (역제곱 감쇠)
+        // Light 1 (워밍 앰버)
+        {
+            float3 toL   = lightPos - hitPos;
+            float  dist  = max(length(toL), 0.01f);
+            float3 L     = toL / dist;
+            float  NdotL = max(0.0f, dot(N, L));
+            float  atten = lightIntensity / (dist * dist);
+            float  vis   = ShadowVis(hitPos + N * 0.001f, L, dist - 0.01f);
+            result += diffAlbedo * NdotL * lightColor * atten * vis;
+        }
+        // Light 2 (쿨 블루)
+        {
+            float3 toL   = light2Pos - hitPos;
+            float  dist  = max(length(toL), 0.01f);
+            float3 L     = toL / dist;
+            float  NdotL = max(0.0f, dot(N, L));
+            float  atten = light2Intensity / (dist * dist);
+            float  vis   = ShadowVis(hitPos + N * 0.001f, L, dist - 0.01f);
+            result += diffAlbedo * NdotL * light2Color * atten * vis;
+        }
+    }
+    return result;
+}
+
+// ── RayGen – 이터레이티브 경로 추적 ────────────────────────────
 [shader("raygeneration")]
 void RayGen()
 {
     uint2 idx = DispatchRaysIndex().xy;
     uint2 dim = DispatchRaysDimensions().xy;
 
-    // NDC [-1, 1] 좌표 계산 (Y 반전)
-    float2 uv  = ((float2)idx + 0.5f) / (float2)dim;
-    float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    uint seed = WangHash(idx.x + idx.y * dim.x + randomSeed * 719393u);
 
-    // 카메라 방향 계산 (핀홀)
+    // 서브픽셀 지터 (안티에일리어싱)
+    float2 jitter = float2(RandFloat(seed), RandFloat(seed)) - 0.5f;
+    float2 uv     = ((float2)idx + 0.5f + jitter) / (float2)dim;
+    float2 ndc    = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+
     float3 dir = normalize(
         camForward +
         camRight * (ndc.x * aspectRatio * tanHalfFovY) +
@@ -72,15 +190,61 @@ void RayGen()
     ray.TMin      = 0.001f;
     ray.TMax      = 1e6f;
 
-    RayPayload payload = { float3(0.0f, 0.0f, 0.0f), 0u };
-    TraceRay(g_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
+    float3 throughput = float3(1.0f, 1.0f, 1.0f);
+    float3 radiance   = float3(0.0f, 0.0f, 0.0f);
 
-    g_output[idx] = float4(payload.color, 1.0f);
+    static const uint k_maxBounce = 8u;
+
+    for (uint bounce = 0u; bounce < k_maxBounce; bounce++)
+    {
+        RayPayload payload;
+        payload.emission      = float3(0.0f, 0.0f, 0.0f);
+        payload.attenuation   = float3(0.0f, 0.0f, 0.0f);
+        payload.nextOrigin    = float3(0.0f, 0.0f, 0.0f);
+        payload.nextDirection = float3(0.0f, 0.0f, 0.0f);
+        payload.seed          = seed;
+        payload.depth         = bounce;
+        payload.terminated    = 0u;
+
+        TraceRay(g_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
+
+        seed = payload.seed;
+        radiance += throughput * payload.emission;
+
+        if (payload.terminated != 0u) break;
+
+        throughput *= payload.attenuation;
+
+        // Russian Roulette (bounce 3부터)
+        if (bounce >= 3u)
+        {
+            float rrProb = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.01f, 1.0f);
+            if (RandFloat(seed) > rrProb) break;
+            throughput /= rrProb;
+        }
+
+        ray.Origin    = payload.nextOrigin;
+        ray.Direction = payload.nextDirection;
+        ray.TMin      = 0.001f;
+        ray.TMax      = 1e6f;
+    }
+
+    // 시간적 누적
+    float3 accumulated;
+    if (frameCount == 0u)
+        accumulated = radiance;
+    else
+        accumulated = lerp(g_accumulation[idx].rgb, radiance, 1.0f / float(frameCount + 1u));
+
+    g_accumulation[idx] = float4(accumulated, 1.0f);
+
+    // Reinhard 톤매핑 + 감마 보정
+    float3 color = accumulated / (accumulated + 1.0f);
+    color = pow(max(color, 0.0f), 1.0f / 2.2f);
+    g_output[idx] = float4(color, 1.0f);
 }
 
-// ──────────────────────────────────────────────────────────────
-//  Miss[0] – 기본 미스: 하늘(씬0) 또는 어두운 주변광(씬1)
-// ──────────────────────────────────────────────────────────────
+// ── Miss[0]: 환경광 ─────────────────────────────────────────────
 [shader("miss")]
 void MissShader(inout RayPayload payload)
 {
@@ -88,177 +252,113 @@ void MissShader(inout RayPayload payload)
 
     if (sceneID == 0)
     {
-        // 씬 0: 하늘 그라데이션 + 태양 원반
-        float t   = saturate(0.5f * (d.y + 1.0f));
-        float3 sky = lerp(float3(1.0f, 1.0f, 1.0f),
-                          float3(0.5f, 0.7f, 1.0f), t);
-
-        // 태양 원반
+        float  t   = saturate(0.5f * (d.y + 1.0f));
+        float3 sky = lerp(float3(1.0f, 1.0f, 1.0f), float3(0.5f, 0.7f, 1.0f), t);
         float3 sunDir = normalize(float3(1.0f, 2.0f, -0.5f));
-        float  s = max(0.0f, dot(d, sunDir));
+        float  s   = max(0.0f, dot(d, sunDir));
         sky += float3(1.0f, 0.9f, 0.7f) * pow(s, 128.0f);
-
-        payload.color = sky;
+        payload.emission = sky;
     }
     else
     {
-        // 씬 1: 매우 어두운 주변광
-        payload.color = float3(0.02f, 0.02f, 0.03f);
+        // 씬 1, 2: 어두운 배경 (실내이므로 하늘 없음)
+        payload.emission = float3(0.01f, 0.01f, 0.015f);
     }
+    payload.terminated = 1u;
 }
 
-// ──────────────────────────────────────────────────────────────
-//  Miss[1] – 그림자 미스: 광원에 도달 (차단 없음)
-// ──────────────────────────────────────────────────────────────
+// ── Miss[1]: 그림자 레이 (광원 도달) ───────────────────────────
 [shader("miss")]
 void MissShadow(inout ShadowPayload payload)
 {
     payload.vis = 1.0f;
 }
 
-// ──────────────────────────────────────────────────────────────
-//  ClosestHit – 완전한 셰이딩
-// ──────────────────────────────────────────────────────────────
+// ── ClosestHit: BRDF 샘플링 + NEE ──────────────────────────────
 [shader("closesthit")]
 void ClosestHit(inout RayPayload payload,
                 BuiltInTriangleIntersectionAttributes attr)
 {
-    uint instID  = InstanceID();
+    // InstanceID 디코딩: 하위4비트=geomType, 상위=matIdx
+    uint rawID    = InstanceID();
+    uint geomType = rawID & 0xFu;
+    uint matIdx   = rawID >> 4u;
+
     uint primIdx = PrimitiveIndex();
     float2 bary  = attr.barycentrics;
     float3 b     = float3(1.0f - bary.x - bary.y, bary.x, bary.y);
-
-    // 정점 인덱스 (비인덱스 삼각형 리스트)
     uint vi = primIdx * 3;
 
-    // 인스턴스 ID에 따라 올바른 정점 버퍼에서 법선 가져오기
+    // 지오메트리 타입에 따라 법선 버퍼 선택
     float3 n0, n1, n2;
-    if (instID == 0)
+    if (geomType == 0u)
     {
-        // 평면 (재질 0)
-        n0 = g_vbPlane[vi].normal;
-        n1 = g_vbPlane[vi + 1].normal;
-        n2 = g_vbPlane[vi + 2].normal;
+        n0 = g_vbPlane[vi].normal; n1 = g_vbPlane[vi+1].normal; n2 = g_vbPlane[vi+2].normal;
     }
-    else if (instID == 2)
+    else if (geomType == 2u)
     {
-        // 방 (재질 2)
-        n0 = g_vbRoom[vi].normal;
-        n1 = g_vbRoom[vi + 1].normal;
-        n2 = g_vbRoom[vi + 2].normal;
+        n0 = g_vbRoom[vi].normal; n1 = g_vbRoom[vi+1].normal; n2 = g_vbRoom[vi+2].normal;
     }
     else
     {
-        // 큐브 (재질 1 또는 3)
-        n0 = g_vbCube[vi].normal;
-        n1 = g_vbCube[vi + 1].normal;
-        n2 = g_vbCube[vi + 2].normal;
+        n0 = g_vbCube[vi].normal; n1 = g_vbCube[vi+1].normal; n2 = g_vbCube[vi+2].normal;
     }
 
-    // 보간된 법선
     float3 N = normalize(n0 * b.x + n1 * b.y + n2 * b.z);
-
-    // 카메라 방향 (뷰 벡터)
     float3 V = -normalize(WorldRayDirection());
+    if (dot(N, V) < 0.0f) N = -N;
 
-    // 법선이 카메라를 향하도록 보장
-    if (dot(N, V) < 0.0f)
-        N = -N;
+    float3 hitPos   = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+    float3 albedo   = matAlbedoRoughness[matIdx].xyz;
+    float  metallic = matMetallic[matIdx];   // float4 컴포넌트 인덱싱
 
-    // 히트 위치
-    float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+    uint seed = payload.seed;
 
-    // 재질 속성 (인스턴스 ID = 재질 인덱스)
-    uint   matIdx    = instID;
-    float3 albedo    = matAlbedoRoughness[matIdx].xyz;
-    float  roughness = matAlbedoRoughness[matIdx].w;
-    float  metallic  = matMetallic[matIdx].x;
-
-    float3 color = float3(0.0f, 0.0f, 0.0f);
-
-    if (sceneID == 0)
+    // 발광체: 직접 방사하고 경로 종료
+    float emissive = matEmissive[matIdx];
+    if (emissive > 0.0f)
     {
-        // ──────────────────────────────
-        // 씬 0: 야외 태양광 + 반사
-        // ──────────────────────────────
-        float3 sunDir   = normalize(float3(1.0f, 2.0f, -0.5f));
-        float3 sunColor = float3(1.0f, 0.95f, 0.8f) * 3.0f;
+        payload.emission   = albedo * emissive;
+        payload.terminated = 1u;
+        payload.seed       = seed;
+        return;
+    }
 
-        // 그림자 레이 (태양 방향)
-        ShadowPayload shadow = { 0.0f };
-        RayDesc shadowRay;
-        shadowRay.Origin    = hitPos + N * 0.001f;
-        shadowRay.Direction = sunDir;
-        shadowRay.TMin      = 0.001f;
-        shadowRay.TMax      = 1e6f;
-        TraceRay(g_tlas,
-            RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-            RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
-            RAY_FLAG_FORCE_OPAQUE,
-            0xFF, 0, 1, 1, shadowRay, shadow);
+    // NEE: 직접광
+    payload.emission = DirectLighting(hitPos, N, albedo, metallic);
 
-        float NdotL = max(0.0f, dot(N, sunDir));
-        float3 diffuse = albedo * (1.0f - metallic) * NdotL * sunColor * shadow.vis;
+    // BRDF 샘플링
+    float3 scatterDir;
+    float3 attenuation;
 
-        // 하늘 주변광 (법선 방향에 따른 그라데이션)
-        float3 skyAmb = lerp(float3(0.1f, 0.1f, 0.2f),
-                             float3(0.4f, 0.6f, 0.9f),
-                             saturate(N.y * 0.5f + 0.5f));
-        float3 ambient = albedo * (1.0f - metallic) * skyAmb * 0.3f;
-
-        color = diffuse + ambient;
-
-        // 금속 재질 반사 레이 (depth < 2)
-        if (metallic > 0.1f && payload.depth == 0)
-        {
-            RayDesc reflRay;
-            reflRay.Origin    = hitPos + N * 0.001f;
-            reflRay.Direction = reflect(-V, N);
-            reflRay.TMin      = 0.001f;
-            reflRay.TMax      = 1e6f;
-
-            RayPayload reflPayload = { float3(0.0f, 0.0f, 0.0f), payload.depth + 1u };
-            TraceRay(g_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, reflRay, reflPayload);
-
-            // 프레넬 (Schlick 근사)
-            float3 F0       = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
-            float  cosTheta = max(0.0f, dot(N, V));
-            float3 F        = F0 + (1.0f - F0) * pow(1.0f - cosTheta, 5.0f);
-
-            color = lerp(color, reflPayload.color, F * metallic);
-        }
+    if (RandFloat(seed) < metallic)
+    {
+        // 정반사 (Schlick 프레넬)
+        scatterDir  = reflect(-V, N);
+        float3 F0   = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+        float  cosT = max(0.0f, dot(N, V));
+        float3 F    = F0 + (1.0f - F0) * pow(1.0f - cosT, 5.0f);
+        attenuation = F;
     }
     else
     {
-        // ──────────────────────────────
-        // 씬 1: 실내 포인트 라이트
-        // ──────────────────────────────
-        float3 toLight = lightPos - hitPos;
-        float  dist    = length(toLight);
-        float3 L       = toLight / dist;
-
-        // 거리 감쇠 (물리 기반)
-        float atten = lightIntensity / (1.0f + dist * dist);
-
-        // 그림자 레이 (광원 방향, TMax = dist)
-        ShadowPayload shadow = { 0.0f };
-        RayDesc shadowRay;
-        shadowRay.Origin    = hitPos + N * 0.001f;
-        shadowRay.Direction = L;
-        shadowRay.TMin      = 0.001f;
-        shadowRay.TMax      = dist - 0.01f;
-        TraceRay(g_tlas,
-            RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-            RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
-            RAY_FLAG_FORCE_OPAQUE,
-            0xFF, 0, 1, 1, shadowRay, shadow);
-
-        float  NdotL   = max(0.0f, dot(N, L));
-        float3 diffuse = albedo * NdotL * lightColor * atten * shadow.vis;
-        float3 ambient = albedo * float3(0.03f, 0.03f, 0.05f);
-
-        color = diffuse + ambient;
+        // Lambertian 확산 (코사인 가중 반구)
+        float2 u    = float2(RandFloat(seed), RandFloat(seed));
+        scatterDir  = CosineSampleHemisphere(u, N);
+        attenuation = albedo * (1.0f - metallic);
     }
 
-    payload.color = color;
+    if (dot(scatterDir, N) <= 0.0f)
+    {
+        payload.terminated = 1u;
+    }
+    else
+    {
+        payload.attenuation   = attenuation;
+        payload.nextOrigin    = hitPos + N * 0.001f;
+        payload.nextDirection = scatterDir;
+        payload.terminated    = 0u;
+    }
+
+    payload.seed = seed;
 }

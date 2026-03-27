@@ -68,18 +68,24 @@ namespace
 
 // ---------------------------------------------------------------
 // 글로벌 루트 시그니처
-// 파라미터 0: 디스크립터 테이블 (UAV u0 + SRV t0..t3)
+// 파라미터 0: 디스크립터 테이블
+//   힙 슬롯 0: UAV u0 (g_output,       RGBA8)
+//   힙 슬롯 1: UAV u1 (g_accumulation, RGBA32F)
+//   힙 슬롯 2: SRV t0 (TLAS)
+//   힙 슬롯 3: SRV t1 (plane VB)
+//   힙 슬롯 4: SRV t2 (cube VB)
+//   힙 슬롯 5: SRV t3 (room VB)
 // 파라미터 1: 인라인 루트 CBV b0 (씬 상수)
 // ---------------------------------------------------------------
 ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
 {
     // 파라미터 0: 디스크립터 테이블
-    //   Range 0: UAV 1개 (u0) - 렌더 타겟
+    //   Range 0: UAV 2개 (u0, u1) - 출력 + 누적 버퍼
     //   Range 1: SRV 4개 (t0..t3) - TLAS + VB 3개
     D3D12_DESCRIPTOR_RANGE1 ranges[2]{};
 
     ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    ranges[0].NumDescriptors                    = 1;
+    ranges[0].NumDescriptors                    = 2;   // u0(output) + u1(accumulation)
     ranges[0].BaseShaderRegister                = 0;
     ranges[0].RegisterSpace                     = 0;
     ranges[0].OffsetInDescriptorsFromTableStart = 0;
@@ -89,7 +95,7 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[1].NumDescriptors                    = 4;   // t0(TLAS) + t1(plane) + t2(cube) + t3(room)
     ranges[1].BaseShaderRegister                = 0;
     ranges[1].RegisterSpace                     = 0;
-    ranges[1].OffsetInDescriptorsFromTableStart = 1;   // 힙 슬롯 1부터
+    ranges[1].OffsetInDescriptorsFromTableStart = 2;   // 힙 슬롯 2부터 (UAV 2개 다음)
     ranges[1].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     D3D12_ROOT_PARAMETER1 params[2]{};
@@ -150,16 +156,17 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
     hitGroup.ClosestHitShaderImport = L"ClosestHit";
 
     // 3. 셰이더 설정
-    //    페이로드: RayPayload(float3 color + uint depth) = 16바이트
-    //             ShadowPayload(float vis) = 4바이트
-    //    MaxPayloadSizeInBytes는 두 페이로드 중 큰 것 사용 (패딩 포함 20)
+    //    RayPayload: float3×4 + uint×3 = 48 + 12 = 60 bytes
+    //    ShadowPayload: float = 4 bytes
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig{};
-    shaderConfig.MaxPayloadSizeInBytes   = 20;  // float3(12) + uint(4) + 패딩(4)
+    shaderConfig.MaxPayloadSizeInBytes   = 60;  // RayPayload 크기
     shaderConfig.MaxAttributeSizeInBytes = sizeof(float) * 2;  // 배리센트릭
 
-    // 4. 파이프라인 설정 (재귀 깊이 3: primary→shadow/reflection, reflection→shadow)
+    // 4. 파이프라인 설정
+    //    재귀 깊이 2: RayGen→ClosestHit(1)→ShadowRay(2)
+    //    iterative bounce이므로 반사 재귀 없음
     D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig{};
-    pipelineConfig.MaxTraceRecursionDepth = 3;
+    pipelineConfig.MaxTraceRecursionDepth = 2;
 
     // 5. 글로벌 루트 시그니처
     D3D12_GLOBAL_ROOT_SIGNATURE globalRS{};

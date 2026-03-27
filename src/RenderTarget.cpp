@@ -6,31 +6,71 @@ void RenderTarget::Init(ID3D12Device* device, DescriptorHeap& heap,
     D3D12_HEAP_PROPERTIES heapProps{};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width            = width;
-    desc.Height           = height;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels        = 1;
-    desc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
-    desc.SampleDesc       = {1, 0};
-    desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    // ── 슬롯 0: g_output (RGBA8, 화면 출력용) ──
+    {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = width;
+        desc.Height           = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc       = {1, 0};
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
-    ThrowIfFailed(device->CreateCommittedResource(
-        &heapProps, D3D12_HEAP_FLAG_NONE,
-        &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        nullptr, IID_PPV_ARGS(&m_texture)));
+        ThrowIfFailed(device->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE,
+            &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            nullptr, IID_PPV_ARGS(&m_texture)));
 
-    m_uavHandle = heap.Allocate();
+        m_uavHandle = heap.Allocate();
 
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-    uavDesc.Format        = DXGI_FORMAT_R8G8B8A8_UNORM;
-    device->CreateUnorderedAccessView(
-        m_texture.Get(), nullptr, &uavDesc, m_uavHandle.cpu);
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uavDesc.Format        = DXGI_FORMAT_R8G8B8A8_UNORM;
+        device->CreateUnorderedAccessView(
+            m_texture.Get(), nullptr, &uavDesc, m_uavHandle.cpu);
 
-    m_currentState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        m_currentState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    }
+
+    // ── 슬롯 1: g_accumulation (RGBA32F, HDR 누적용) ──
+    {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = width;
+        desc.Height           = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        desc.SampleDesc       = {1, 0};
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        ThrowIfFailed(device->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE,
+            &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            nullptr, IID_PPV_ARGS(&m_accumulation)));
+
+        m_accumHandle = heap.Allocate();
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uavDesc.Format        = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        device->CreateUnorderedAccessView(
+            m_accumulation.Get(), nullptr, &uavDesc, m_accumHandle.cpu);
+    }
+}
+
+void RenderTarget::UAVBarriers(ID3D12GraphicsCommandList* cmdList)
+{
+    D3D12_RESOURCE_BARRIER barriers[2]{};
+    barriers[0].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barriers[0].UAV.pResource = m_texture.Get();
+    barriers[1].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barriers[1].UAV.pResource = m_accumulation.Get();
+    cmdList->ResourceBarrier(2, barriers);
 }
 
 void RenderTarget::TransitionTo(ID3D12GraphicsCommandList* cmdList,

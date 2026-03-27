@@ -15,6 +15,11 @@ public:
     void OnResize(uint32_t width, uint32_t height);
     void OnKeyDown(uint32_t key);
 
+    // 마우스 캡처 (좌클릭으로 토글, ESC/포커스 잃을 때 해제)
+    void ToggleMouseCapture();
+    void ReleaseMouseCapture();
+    bool IsMouseCaptured() const noexcept { return m_mouseCaptured; }
+
 private:
     // 초기화 헬퍼
     void BuildBLASes();
@@ -54,8 +59,16 @@ private:
     Camera   m_camera;
 
     // 씬 상태
-    uint32_t m_sceneID   = 0;    // 0 = 야외, 1 = 실내
-    uint32_t m_width     = k_defaultWidth;
-    uint32_t m_height    = k_defaultHeight;
+    uint32_t m_sceneID    = 0;
+    uint32_t m_width      = k_defaultWidth;
+    uint32_t m_height     = k_defaultHeight;
     bool     m_sceneBuilt = false;
+
+    // 패스 트레이싱 누적
+    uint32_t m_frameCount   = 0;
+    bool     m_cameraMoved  = true;
+
+    // 마우스 캡처
+    HWND     m_hwnd          = nullptr;
+    bool     m_mouseCaptured = false;
 };
