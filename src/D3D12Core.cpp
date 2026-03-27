@@ -72,7 +72,7 @@ void D3D12Core::CreateDevice()
             {
                 DXGI_ADAPTER_DESC1 desc{};
                 adapter->GetDesc1(&desc);
-                std::println(L"[D3D12Core] 어댑터: {}", desc.Description);
+                wprintf(L"[D3D12Core] 어댑터: %s\n", desc.Description);
                 return;
             }
             m_device.Reset();
