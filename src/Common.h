@@ -30,7 +30,22 @@ inline void ThrowIfFailed(HRESULT hr, std::string_view msg = "")
 {
     if (FAILED(hr))
     {
-        auto err = std::format("HRESULT 0x{:08X} {}", static_cast<uint32_t>(hr), msg);
+        char* winMsg = nullptr;
+        FormatMessageA(
+            FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+            FORMAT_MESSAGE_IGNORE_INSERTS,
+            nullptr, static_cast<DWORD>(hr),
+            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+            reinterpret_cast<char*>(&winMsg), 0, nullptr);
+
+        std::string desc = winMsg ? winMsg : "";
+        if (winMsg) LocalFree(winMsg);
+        // 줄바꿈 제거
+        if (!desc.empty() && desc.back() == '\n') desc.pop_back();
+        if (!desc.empty() && desc.back() == '\r') desc.pop_back();
+
+        auto err = std::format("HRESULT 0x{:08X} ({}){}", static_cast<uint32_t>(hr),
+                               desc, msg.empty() ? "" : std::format(" [{}]", msg));
         throw std::runtime_error(err);
     }
 }
