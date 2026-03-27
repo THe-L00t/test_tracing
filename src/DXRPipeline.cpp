@@ -28,8 +28,9 @@ namespace
         source.Encoding = DXC_CP_UTF8;
 
         // 컴파일 인수
+        std::wstring filenameStr = path.filename().wstring();
         std::vector<LPCWSTR> args = {
-            path.filename().c_str(),
+            filenameStr.c_str(),
             L"-T", L"lib_6_3",
             L"-HV", L"2021",  // HLSL 2021
 #if defined(_DEBUG)

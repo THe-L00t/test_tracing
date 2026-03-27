@@ -71,7 +71,7 @@ void BLAS::Build(ID3D12Device5*              device,
 
     m_scratch = CreateBuffer(device, info.ScratchDataSizeInBytes,
                              D3D12_HEAP_TYPE_DEFAULT,
-                             D3D12_RESOURCE_STATE_COMMON,
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     m_blas    = CreateBuffer(device, info.ResultDataMaxSizeInBytes,
                              D3D12_HEAP_TYPE_DEFAULT,
@@ -126,7 +126,7 @@ void TLAS::Build(ID3D12Device5*              device,
 
     m_scratch = CreateBuffer(device, info.ScratchDataSizeInBytes,
                              D3D12_HEAP_TYPE_DEFAULT,
-                             D3D12_RESOURCE_STATE_COMMON,
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     m_tlas    = CreateBuffer(device, info.ResultDataMaxSizeInBytes,
                              D3D12_HEAP_TYPE_DEFAULT,

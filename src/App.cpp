@@ -7,13 +7,20 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
     m_height = height;
 
     m_core.Init(hwnd, width, height);
+    std::println("[App] D3D12Core 완료");
 
     m_globalRS = CreateGlobalRootSignature(m_core.Device());
+    std::println("[App] 글로벌 루트시그니처 완료");
+
     m_pipeline.Init(m_core.Device(), m_globalRS.Get());
+    std::println("[App] RTPSO 완료");
 
     // 씬과 디스크립터는 첫 렌더 전에 한 번만 빌드
     BuildScene();
+    std::println("[App] BuildScene 완료");
+
     BuildDescriptors();
+    std::println("[App] BuildDescriptors 완료");
 
     m_pipeline.BuildShaderTable(m_core.Device());
 
