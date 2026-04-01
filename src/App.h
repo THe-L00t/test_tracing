@@ -5,6 +5,7 @@
 #include "DXRPipeline.h"
 #include "AccelerationStructure.h"
 #include "RenderTarget.h"
+#include <chrono>
 
 class App
 {
@@ -41,16 +42,18 @@ private:
     BLAS m_planeBLAS;
     BLAS m_cubeBLAS;
     BLAS m_roomBLAS;
+    BLAS m_sphereBLAS;
     TLAS m_tlas;
 
     // 루트 시그니처
     ComPtr<ID3D12RootSignature> m_globalRS;
 
-    // 디스크립터 핸들 (힙 슬롯 1..4)
+    // 디스크립터 핸들 (힙 슬롯 0..6)
     DescriptorHandle m_tlasSRV;
     DescriptorHandle m_planeVbSRV;
     DescriptorHandle m_cubeVbSRV;
     DescriptorHandle m_roomVbSRV;
+    DescriptorHandle m_sphereVbSRV;
 
     // 씬 상수 버퍼 (업로드 힙, 256바이트, 매 프레임 기록)
     ComPtr<ID3D12Resource> m_sceneCB;
@@ -71,4 +74,9 @@ private:
     // 마우스 캡처
     HWND     m_hwnd          = nullptr;
     bool     m_mouseCaptured = false;
+
+    // FPS 측정 (지수이동평균)
+    using Clock = std::chrono::high_resolution_clock;
+    Clock::time_point m_lastFrameTime{};
+    float             m_smoothFps = 0.0f;
 };

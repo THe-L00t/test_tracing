@@ -1,6 +1,7 @@
 #pragma once
 #include "Common.h"
 #include "DescriptorHeap.h"
+#include "TextOverlay.h"
 
 // D3D12 디바이스, 커맨드 큐, 스왑체인, 동기화 원시체 관리
 class D3D12Core
@@ -9,9 +10,9 @@ public:
     void Init(HWND hwnd, uint32_t width, uint32_t height);
     void Shutdown();
 
-    // 프레임 시작 / 끝
+    // 프레임 시작 / 끝 (fps: 화면 표시용, 0이면 표시 안 함)
     void BeginFrame();
-    void EndFrame();
+    void EndFrame(float fps = 0.0f);
 
     // 커맨드 리스트 제출 후 GPU 완전 대기 (Present 없음, 초기화용)
     void SubmitAndFlush();
@@ -48,6 +49,8 @@ private:
 
     DescriptorHeap m_rtvHeap;
     DescriptorHeap m_cbvSrvUavHeap;
+
+    TextOverlay m_textOverlay;
 
     ComPtr<ID3D12Fence> m_fence;
     HANDLE              m_fenceEvent = nullptr;

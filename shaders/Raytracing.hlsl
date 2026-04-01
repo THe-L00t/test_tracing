@@ -3,11 +3,21 @@
 //
 //  씬 0 (야외):  평면 바닥 + 금속 큐브, 태양 방향광
 //  씬 1 (실내):  박스 룸 + 매트 큐브, 포인트 라이트 1개
-//  씬 2 (쇼케이스): 박스 룸 + PBR 큐브 3개, 컬러 포인트 라이트 2개
+//  씬 2 (구 쇼케이스): 박스 룸 + 골드 큐브 + 반투명 구 + 유리 구, 포인트 라이트 2개
 //
 //  InstanceID 인코딩:
-//    하위 4비트 = geomType (0=plane, 1=cube, 2=room)
+//    하위 4비트 = geomType (0=plane, 1=cube, 2=room, 3=sphere)
 //    상위 비트  = matIdx   (0..3)
+//
+//  재질 특수 인코딩 (matEmissive 필드):
+//    matEmissive >  0   : 발광체
+//    matEmissive == 0   : 불투명 (Lambertian/금속)
+//    matEmissive < -0.5 : 반투명 (확산+투과 혼합)
+//    matEmissive < -1.5 : 유리 (Fresnel 굴절/반사, IOR=1.5)
+//
+//  그림자 마스크:
+//    일반/반투명 인스턴스: instanceMask = 0xFF
+//    유리 구 인스턴스:     instanceMask = 0x02 (ShadowVis 0xFD로 제외)
 // ──────────────────────────────────────────────────────────────
 
 // ── 리소스 ──────────────────────────────────────────────────────
@@ -16,9 +26,10 @@ RWTexture2D<float4>             g_accumulation : register(u1);
 RaytracingAccelerationStructure g_tlas         : register(t0);
 
 struct VertexPN { float3 pos; float3 normal; };
-StructuredBuffer<VertexPN> g_vbPlane : register(t1);
-StructuredBuffer<VertexPN> g_vbCube  : register(t2);
-StructuredBuffer<VertexPN> g_vbRoom  : register(t3);
+StructuredBuffer<VertexPN> g_vbPlane   : register(t1);
+StructuredBuffer<VertexPN> g_vbCube    : register(t2);
+StructuredBuffer<VertexPN> g_vbRoom    : register(t3);
+StructuredBuffer<VertexPN> g_vbSphere  : register(t4);
 
 cbuffer SceneConstants : register(b0)
 {
@@ -108,7 +119,7 @@ float ShadowVis(float3 origin, float3 dir, float tmax)
         RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
         RAY_FLAG_SKIP_CLOSEST_HIT_SHADER         |
         RAY_FLAG_FORCE_OPAQUE,
-        0xFF, 0, 1, 1, sr, sp);
+        0xFD, 0, 1, 1, sr, sp); // 0xFD: 유리 구(마스크 0x02) 제외 – 빛이 통과
     return sp.vis;
 }
 
@@ -339,14 +350,21 @@ void ClosestHit(inout RayPayload payload,
     {
         n0 = g_vbRoom[vi].normal; n1 = g_vbRoom[vi+1].normal; n2 = g_vbRoom[vi+2].normal;
     }
+    else if (geomType == 3u)
+    {
+        n0 = g_vbSphere[vi].normal; n1 = g_vbSphere[vi+1].normal; n2 = g_vbSphere[vi+2].normal;
+    }
     else
     {
         n0 = g_vbCube[vi].normal; n1 = g_vbCube[vi+1].normal; n2 = g_vbCube[vi+2].normal;
     }
 
-    float3 N = normalize(n0 * b.x + n1 * b.y + n2 * b.z);
+    // rawN: 플립 전 원래 법선 (유리 입사/출사 판별용)
+    float3 rawN = normalize(n0 * b.x + n1 * b.y + n2 * b.z);
     float3 V = -normalize(WorldRayDirection());
+    float3 N = rawN;
     if (dot(N, V) < 0.0f) N = -N;
+    bool entering = dot(rawN, V) >= 0.0f; // true=입사(공기→재질), false=출사(재질→공기)
 
     float3 hitPos   = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     float3 albedo   = matAlbedoRoughness[matIdx].xyz;
@@ -354,8 +372,86 @@ void ClosestHit(inout RayPayload payload,
 
     uint seed = payload.seed;
 
-    // 발광체: 직접 방사하고 경로 종료
     float emissive = matEmissive[matIdx];
+
+    // ── 투명/반투명 재질 처리 ────────────────────────────────────
+    // matEmissive < -1.5 → 유리 (Fresnel 굴절+반사, IOR=1.5)
+    // matEmissive < -0.5 → 반투명 (확산 산란 + 투과 혼합)
+    if (emissive < -0.5f)
+    {
+        if (emissive < -1.5f)
+        {
+            // ── 유리 (Dielectric, IOR=1.5) ──────────────────────
+            float ior = 1.5f;
+            // 입사 시: eta=공기/유리=1/1.5, 출사 시: eta=유리/공기=1.5/1
+            float eta = entering ? (1.0f / ior) : ior;
+
+            float3 inc      = normalize(WorldRayDirection());
+            float  cosTheta = max(0.0f, dot(N, V)); // N이 V방향을 향하므로 항상 양수
+
+            // Schlick 근사 프레넬 (r0 ≈ 0.04 for glass)
+            float r0 = (1.0f - ior) / (1.0f + ior);
+            r0 = r0 * r0; // ≈ 0.04
+            float fresnel = r0 + (1.0f - r0) * pow(1.0f - cosTheta, 5.0f);
+
+            // Snell의 법칙 굴절 (전반사 시 refract는 0벡터 반환)
+            float3 refracted = refract(inc, N, eta);
+            bool   tir       = dot(refracted, refracted) < 0.0001f; // 전반사
+
+            float3 scatterDir = (tir || RandFloat(seed) < fresnel)
+                ? reflect(inc, N)   // 반사
+                : refracted;        // 굴절
+
+            payload.emission      = float3(0.0f, 0.0f, 0.0f);
+            payload.attenuation   = albedo; // albedo로 유리 색조 적용
+            payload.nextOrigin    = hitPos + scatterDir * 0.001f;
+            payload.nextDirection = scatterDir;
+            payload.terminated    = 0u;
+            payload.seed          = seed;
+            return;
+        }
+        else
+        {
+            // ── 반투명 (Translucent): 확산 산란 50% + 투과 50% ──
+            float3 scatterDir;
+            float3 atten;
+
+            if (entering)
+            {
+                // 앞면: 확산 산란 또는 투과 선택
+                if (RandFloat(seed) < 0.5f)
+                {
+                    // 확산 산란 (코사인 가중 반구, 표면 외부 방향)
+                    float2 u   = float2(RandFloat(seed), RandFloat(seed));
+                    scatterDir = CosineSampleHemisphere(u, N);
+                    atten      = albedo;
+                }
+                else
+                {
+                    // 직진 투과 (구 내부로 진입)
+                    scatterDir = normalize(WorldRayDirection());
+                    atten      = albedo * 0.85f;
+                }
+                payload.emission = DirectLighting(hitPos, N, albedo * 0.5f, 0.0f, seed);
+            }
+            else
+            {
+                // 뒷면(출사): 투과하여 구 밖으로
+                scatterDir       = normalize(WorldRayDirection());
+                atten            = albedo * 0.90f;
+                payload.emission = float3(0.0f, 0.0f, 0.0f);
+            }
+
+            payload.attenuation   = atten;
+            payload.nextOrigin    = hitPos + scatterDir * 0.001f;
+            payload.nextDirection = scatterDir;
+            payload.terminated    = 0u;
+            payload.seed          = seed;
+            return;
+        }
+    }
+
+    // 발광체: 직접 방사하고 경로 종료
     if (emissive > 0.0f)
     {
         payload.emission   = albedo * emissive;

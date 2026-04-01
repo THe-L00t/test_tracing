@@ -75,6 +75,7 @@ namespace
 //   힙 슬롯 3: SRV t1 (plane VB)
 //   힙 슬롯 4: SRV t2 (cube VB)
 //   힙 슬롯 5: SRV t3 (room VB)
+//   힙 슬롯 6: SRV t4 (sphere VB)
 // 파라미터 1: 인라인 루트 CBV b0 (씬 상수)
 // ---------------------------------------------------------------
 ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
@@ -92,7 +93,7 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[0].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     ranges[1].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    ranges[1].NumDescriptors                    = 4;   // t0(TLAS) + t1(plane) + t2(cube) + t3(room)
+    ranges[1].NumDescriptors                    = 5;   // t0(TLAS) + t1(plane) + t2(cube) + t3(room) + t4(sphere)
     ranges[1].BaseShaderRegister                = 0;
     ranges[1].RegisterSpace                     = 0;
     ranges[1].OffsetInDescriptorsFromTableStart = 2;   // 힙 슬롯 2부터 (UAV 2개 다음)

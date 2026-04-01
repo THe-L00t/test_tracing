@@ -1,6 +1,68 @@
 #include "App.h"
 #include <print>
 #include <cstring>
+#include <cmath>
+#include <vector>
+
+// ---------------------------------------------------------------
+// 구 메시 생성 (UV 구, 삼각형 리스트, 단위 구 반지름 1)
+// stacks: 위아래 분할 수, slices: 수평 분할 수
+// ---------------------------------------------------------------
+static std::vector<VertexPN> GenerateSphereVerts(int stacks = 20, int slices = 20)
+{
+    std::vector<VertexPN> verts;
+    constexpr float pi = 3.14159265358979323846f;
+
+    // 구 표면 위의 한 점 계산: normal = position (단위 구)
+    auto makeVert = [](float theta, float phi) -> VertexPN
+    {
+        float st = sinf(theta), ct = cosf(theta);
+        float sp = sinf(phi),   cp = cosf(phi);
+        float x = st * cp, y = ct, z = st * sp;
+        return VertexPN{ {x, y, z}, {x, y, z} };
+    };
+
+    for (int i = 0; i < stacks; ++i)
+    {
+        float t0 = pi * float(i)     / float(stacks);
+        float t1 = pi * float(i + 1) / float(stacks);
+
+        for (int j = 0; j < slices; ++j)
+        {
+            float p0 = 2.0f * pi * float(j)     / float(slices);
+            float p1 = 2.0f * pi * float(j + 1) / float(slices);
+
+            VertexPN v00 = makeVert(t0, p0);
+            VertexPN v10 = makeVert(t1, p0);
+            VertexPN v01 = makeVert(t0, p1);
+            VertexPN v11 = makeVert(t1, p1);
+
+            if (i == 0) // 상단 캡: 삼각형
+            {
+                verts.push_back(v00);
+                verts.push_back(v11);
+                verts.push_back(v10);
+            }
+            else if (i == stacks - 1) // 하단 캡: 삼각형
+            {
+                verts.push_back(v00);
+                verts.push_back(v01);
+                verts.push_back(v11);
+            }
+            else // 중간 밴드: 쿼드 = 삼각형 2개
+            {
+                verts.push_back(v00);
+                verts.push_back(v11);
+                verts.push_back(v10);
+
+                verts.push_back(v00);
+                verts.push_back(v01);
+                verts.push_back(v11);
+            }
+        }
+    }
+    return verts;
+}
 
 // ---------------------------------------------------------------
 // 씬 지오메트리 정의
@@ -252,6 +314,11 @@ void App::BuildBLASes()
                      std::span{ g_cubeVerts });
     m_roomBLAS.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ g_roomVerts });
+
+    // 구 BLAS: UV 구 메시 생성 후 빌드 (stacks=20, slices=20)
+    auto sphereVerts = GenerateSphereVerts(20, 20);
+    m_sphereBLAS.Build(m_core.Device(), m_core.CmdList(),
+                       std::span{ sphereVerts });
 }
 
 // ---------------------------------------------------------------
@@ -313,6 +380,19 @@ void App::BuildDescriptors()
         srvDesc.Buffer.Flags               = D3D12_BUFFER_SRV_FLAG_NONE;
         device->CreateShaderResourceView(m_roomBLAS.VertexBuffer(), &srvDesc, m_roomVbSRV.cpu);
     }
+
+    // 슬롯 6: SRV (sphere VB)
+    m_sphereVbSRV = heap.Allocate();
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Buffer.FirstElement        = 0;
+        srvDesc.Buffer.NumElements         = m_sphereBLAS.VertexCount();
+        srvDesc.Buffer.StructureByteStride = sizeof(VertexPN);
+        srvDesc.Buffer.Flags               = D3D12_BUFFER_SRV_FLAG_NONE;
+        device->CreateShaderResourceView(m_sphereBLAS.VertexBuffer(), &srvDesc, m_sphereVbSRV.cpu);
+    }
 }
 
 // ---------------------------------------------------------------
@@ -364,9 +444,9 @@ void App::SwitchScene(uint32_t id)
     }
     else if (m_sceneID == 2)
     {
-        // 씬 2 (PBR 쇼케이스): 방 + 큐브 3개 + 컬러 라이트 2개
-        std::println("[App] 씬 2 (PBR 쇼케이스) 전환");
-        m_camera.Init(0.0f, 2.0f, -2.5f, 0.0f, 0.1f); // 살짝 아래 시점
+        // 씬 2 (투명/반투명 구 쇼케이스): 방 + 골드 큐브 + 반투명 구 + 유리 구
+        std::println("[App] 씬 2 (구 쇼케이스) 전환");
+        m_camera.Init(0.0f, 1.8f, -2.5f, 0.0f, 0.05f);
 
         TLASInstance instances[4]{};
 
@@ -374,24 +454,30 @@ void App::SwitchScene(uint32_t id)
         MakeIdentityTransform(instances[0].transform);
         instances[0].blasResource = m_roomBLAS.Resource();
         instances[0].instanceID   = EncodeID(2, 0);
+        instances[0].mask         = 0xFF;
 
-        // 골드 메탈릭 큐브 – 왼쪽 세로로 긴 기둥
+        // 골드 메탈릭 큐브 – 왼쪽 기둥
         MakeScaleTranslateTransform(instances[1].transform,
-            0.8f, 2.2f, 0.8f, -1.5f, 1.1f, 0.8f);
+            0.8f, 2.0f, 0.8f, -1.8f, 1.0f, 0.5f);
         instances[1].blasResource = m_cubeBLAS.Resource();
         instances[1].instanceID   = EncodeID(1, 1); // cube, mat1
+        instances[1].mask         = 0xFF;
 
-        // 테라코타 무광 큐브 – 정면 납작하게
+        // 반투명 구 (mat2) – 왼쪽 중앙, 반지름 0.7
+        // geomType=3 (sphere), matIdx=2
         MakeScaleTranslateTransform(instances[2].transform,
-            2.0f, 0.55f, 1.1f, 0.3f, 0.275f, 1.5f);
-        instances[2].blasResource = m_cubeBLAS.Resource();
-        instances[2].instanceID   = EncodeID(1, 2); // cube, mat2
+            0.7f, 0.7f, 0.7f, -0.5f, 0.7f, 0.5f);
+        instances[2].blasResource = m_sphereBLAS.Resource();
+        instances[2].instanceID   = EncodeID(3, 2);
+        instances[2].mask         = 0xFF; // 그림자 캐스팅 (반투명)
 
-        // 구리 메탈릭 큐브 – 오른쪽 중간 크기
+        // 투명 유리 구 (mat3) – 오른쪽, 반지름 0.8
+        // geomType=3 (sphere), matIdx=3
         MakeScaleTranslateTransform(instances[3].transform,
-            0.7f, 0.7f, 0.7f, 1.8f, 0.35f, 0.0f);
-        instances[3].blasResource = m_cubeBLAS.Resource();
-        instances[3].instanceID   = EncodeID(1, 3); // cube, mat3
+            0.8f, 0.8f, 0.8f, 0.9f, 0.8f, 0.3f);
+        instances[3].blasResource = m_sphereBLAS.Resource();
+        instances[3].instanceID   = EncodeID(3, 3);
+        instances[3].mask         = 0x02; // 그림자 레이 제외 (유리)
 
         m_tlas.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ instances });
@@ -582,48 +668,44 @@ void App::UpdateSceneCB()
     }
     else
     {
-        // ── 씬 2 (PBR 쇼케이스): 컬러 포인트 라이트 2개 ──
-        // 역제곱 법칙 기준: dist≈4m에서 atten = I/dist² 가 0.4~0.5가 되도록 I≈7
-        // Light 1: 워밍 앰버 – 왼쪽 위
-        cb.lightPos[0]=-2.0f; cb.lightPos[1]=3.6f; cb.lightPos[2]=0.0f;
+        // ── 씬 2 (투명/반투명 구 쇼케이스): 포인트 라이트 2개 ──
+        // Light 1: 왼쪽 위
+        cb.lightPos[0]=-1.5f; cb.lightPos[1]=3.6f; cb.lightPos[2]=0.0f;
         cb.lightIntensity=7.0f;
         cb.lightColor[0]=1.0f; cb.lightColor[1]=1.0f; cb.lightColor[2]=1.0f;
 
-        // Light 2: 흰색 – 오른쪽 위
-        cb.light2Pos[0]=2.0f; cb.light2Pos[1]=3.6f; cb.light2Pos[2]=-1.5f;
+        // Light 2: 오른쪽 위
+        cb.light2Pos[0]=1.5f; cb.light2Pos[1]=3.6f; cb.light2Pos[2]=-1.5f;
         cb.light2Intensity=5.5f;
         cb.light2Color[0]=1.0f; cb.light2Color[1]=1.0f; cb.light2Color[2]=1.0f;
 
-        // mat0: 방 벽/바닥/천장 – 파란색 채도 50% (HSL 240° S=50% L=50% → RGB 0.25,0.25,0.75)
-        cb.matAlbedoRoughness[0][0]=0.25f; cb.matAlbedoRoughness[0][1]=0.25f;
-        cb.matAlbedoRoughness[0][2]=0.75f; cb.matAlbedoRoughness[0][3]=0.92f;
+        // mat0: 방 벽/바닥/천장 – 흰색
+        cb.matAlbedoRoughness[0][0]=0.85f; cb.matAlbedoRoughness[0][1]=0.85f;
+        cb.matAlbedoRoughness[0][2]=0.85f; cb.matAlbedoRoughness[0][3]=0.90f;
         cb.matMetallic[0] = 0.0f;
+        cb.matEmissive[0] = 0.0f;
 
-        // mat1: 골드 메탈릭 (물리 기반 금색)
+        // mat1: 골드 메탈릭 큐브
         cb.matAlbedoRoughness[1][0]=1.00f; cb.matAlbedoRoughness[1][1]=0.71f;
         cb.matAlbedoRoughness[1][2]=0.29f; cb.matAlbedoRoughness[1][3]=0.12f;
         cb.matMetallic[1] = 1.0f;
-
-        // mat2: 매트 빨간색
-        cb.matAlbedoRoughness[2][0]=0.90f; cb.matAlbedoRoughness[2][1]=0.05f;
-        cb.matAlbedoRoughness[2][2]=0.05f; cb.matAlbedoRoughness[2][3]=0.95f;
-        cb.matMetallic[2] = 0.0f;
-        cb.matEmissive[2] = 0.0f;
-
-        // mat3: 발광체 – 초록 계열 (emissive green)
-        cb.matAlbedoRoughness[3][0]=0.10f; cb.matAlbedoRoughness[3][1]=0.90f;
-        cb.matAlbedoRoughness[3][2]=0.20f; cb.matAlbedoRoughness[3][3]=0.90f;
-        cb.matMetallic[3] = 0.0f;
-        cb.matEmissive[3] = 4.0f;  // albedo × 4.0 방출
-
-        cb.matEmissive[0] = 0.0f;
         cb.matEmissive[1] = 0.0f;
 
-        // 발광 박스 면광원 정보 (인스턴스 3: scale 0.7, center (1.8, 0.35, 0.0))
-        cb.emissBoxHalfSize    = 0.35f;
-        cb.emissBoxCenter[0]   = 1.8f;
-        cb.emissBoxCenter[1]   = 0.35f;
-        cb.emissBoxCenter[2]   = 0.0f;
+        // mat2: 반투명 구 (옅은 하늘색)
+        // matEmissive = -1.0: 반투명 재질 신호
+        cb.matAlbedoRoughness[2][0]=0.65f; cb.matAlbedoRoughness[2][1]=0.85f;
+        cb.matAlbedoRoughness[2][2]=1.00f; cb.matAlbedoRoughness[2][3]=0.20f;
+        cb.matMetallic[2] = 0.0f;
+        cb.matEmissive[2] = -1.0f; // 반투명 신호
+
+        // mat3: 투명 유리 구 (맑은 유리, IOR=1.5)
+        // matEmissive = -2.0: 유리 재질 신호
+        cb.matAlbedoRoughness[3][0]=0.95f; cb.matAlbedoRoughness[3][1]=0.98f;
+        cb.matAlbedoRoughness[3][2]=1.00f; cb.matAlbedoRoughness[3][3]=0.02f;
+        cb.matMetallic[3] = 0.0f;
+        cb.matEmissive[3] = -2.0f; // 유리 신호 (IOR=1.5)
+
+        cb.emissBoxHalfSize = 0.0f; // 발광 박스 없음
     }
 
     // 패스 트레이싱 누적 파라미터
@@ -653,7 +735,20 @@ void App::OnKeyDown(uint32_t key)
 // ---------------------------------------------------------------
 void App::OnRender()
 {
-    constexpr float k_dt = 0.016f;  // 고정 델타타임
+    // ── 실제 프레임 시간 측정 + FPS 계산 (지수이동평균, α=0.1) ──
+    auto now = Clock::now();
+    if (m_lastFrameTime.time_since_epoch().count() != 0)
+    {
+        float dt = std::chrono::duration<float>(now - m_lastFrameTime).count();
+        float instantFps = (dt > 0.0f) ? 1.0f / dt : 0.0f;
+        if (m_smoothFps < 1.0f)
+            m_smoothFps = instantFps;   // 첫 프레임: 초기화
+        else
+            m_smoothFps = m_smoothFps * 0.9f + instantFps * 0.1f;
+    }
+    m_lastFrameTime = now;
+
+    constexpr float k_dt = 0.016f;  // 입력 처리용 고정 델타타임
 
     ProcessInput(k_dt);
 
@@ -705,7 +800,7 @@ void App::OnRender()
     // 결과를 백버퍼로 복사 후 Present
     m_renderTarget.CopyToBackBuffer(cmd, m_core.BackBuffer());
 
-    m_core.EndFrame();
+    m_core.EndFrame(m_smoothFps);
 }
 
 void App::OnResize(uint32_t width, uint32_t height)

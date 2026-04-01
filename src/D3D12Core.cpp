@@ -1,5 +1,6 @@
 #include "D3D12Core.h"
 #include <print>
+#include <format>
 
 void D3D12Core::Init(HWND hwnd, uint32_t width, uint32_t height)
 {
@@ -16,6 +17,10 @@ void D3D12Core::Init(HWND hwnd, uint32_t width, uint32_t height)
                          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
                          64, true);
 
+    // 텍스트 오버레이 (D3D11On12 + Direct2D + DirectWrite)
+    m_textOverlay.Init(m_device.Get(), m_cmdQueue.Get(),
+                       m_swapChain.Get(), width, height);
+
     // 펜스 생성
     ThrowIfFailed(m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
                                         IID_PPV_ARGS(&m_fence)));
@@ -29,6 +34,7 @@ void D3D12Core::Init(HWND hwnd, uint32_t width, uint32_t height)
 void D3D12Core::Shutdown()
 {
     FlushGPU();
+    m_textOverlay.Shutdown();
     if (m_fenceEvent) CloseHandle(m_fenceEvent);
 }
 
@@ -149,12 +155,15 @@ void D3D12Core::BeginFrame()
     ThrowIfFailed(m_cmdList->Reset(alloc.Get(), nullptr));
 }
 
-void D3D12Core::EndFrame()
+void D3D12Core::EndFrame(float fps)
 {
     ThrowIfFailed(m_cmdList->Close());
 
     ID3D12CommandList* lists[] = {m_cmdList.Get()};
     m_cmdQueue->ExecuteCommandLists(1, lists);
+
+    // FPS 텍스트 오버레이: D3D12 Execute 이후, Present 이전에 렌더
+    m_textOverlay.DrawFPS(fps, m_backBufferIdx);
 
     ThrowIfFailed(m_swapChain->Present(1, 0));
 
