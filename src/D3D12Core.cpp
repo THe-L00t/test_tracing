@@ -155,15 +155,15 @@ void D3D12Core::BeginFrame()
     ThrowIfFailed(m_cmdList->Reset(alloc.Get(), nullptr));
 }
 
-void D3D12Core::EndFrame(float fps)
+void D3D12Core::EndFrame(float fps, bool denoiserOn)
 {
     ThrowIfFailed(m_cmdList->Close());
 
     ID3D12CommandList* lists[] = {m_cmdList.Get()};
     m_cmdQueue->ExecuteCommandLists(1, lists);
 
-    // FPS 텍스트 오버레이: D3D12 Execute 이후, Present 이전에 렌더
-    m_textOverlay.DrawFPS(fps, m_backBufferIdx);
+    // FPS + 디노이저 상태 텍스트 오버레이: D3D12 Execute 이후, Present 이전에 렌더
+    m_textOverlay.DrawFPS(fps, m_backBufferIdx, denoiserOn);
 
     ThrowIfFailed(m_swapChain->Present(1, 0));
 

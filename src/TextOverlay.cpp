@@ -125,7 +125,7 @@ void TextOverlay::CreatePerBufferResources(IDXGISwapChain3* swapChain,
     }
 }
 
-void TextOverlay::DrawFPS(float fps, uint32_t backBufferIdx)
+void TextOverlay::DrawFPS(float fps, uint32_t backBufferIdx, bool denoiserOn)
 {
     if (!m_ready) return;
 
@@ -138,17 +138,20 @@ void TextOverlay::DrawFPS(float fps, uint32_t backBufferIdx)
     m_d2dContext->BeginDraw();
     m_d2dContext->SetTransform(D2D1::Matrix3x2F::Identity());
 
-    // FPS 문자열 조합
-    wchar_t buf[64];
-    swprintf_s(buf, L"FPS: %.1f", fps);
+    // 텍스트 조합: "FPS: X.X | DNSR: ON" 또는 "FPS: X.X"
+    wchar_t buf[128];
+    if (denoiserOn)
+        swprintf_s(buf, L"FPS: %.1f  |  DNSR: ON", fps);
+    else
+        swprintf_s(buf, L"FPS: %.1f", fps);
     UINT32 len = static_cast<UINT32>(wcslen(buf));
 
     // 그림자 (+1px 오프셋 검정)
-    D2D1_RECT_F shadow = D2D1::RectF(11.0f, 11.0f, 300.0f, 40.0f);
+    D2D1_RECT_F shadow = D2D1::RectF(11.0f, 11.0f, 420.0f, 40.0f);
     m_d2dContext->DrawText(buf, len, m_textFormat.Get(), shadow, m_shadowBrush.Get());
 
     // 본문 (흰색)
-    D2D1_RECT_F text = D2D1::RectF(10.0f, 10.0f, 300.0f, 40.0f);
+    D2D1_RECT_F text = D2D1::RectF(10.0f, 10.0f, 420.0f, 40.0f);
     m_d2dContext->DrawText(buf, len, m_textFormat.Get(), text, m_textBrush.Get());
 
     m_d2dContext->EndDraw();

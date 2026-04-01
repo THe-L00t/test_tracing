@@ -99,6 +99,7 @@
     <ClCompile Include="src\DescriptorHeap.cpp" />
     <ClCompile Include="src\RenderTarget.cpp" />
     <ClCompile Include="src\TextOverlay.cpp" />
+    <ClCompile Include="src\Denoiser.cpp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -112,10 +113,12 @@
     <ClInclude Include="src\RenderTarget.h" />
     <ClInclude Include="src\Common.h" />
     <ClInclude Include="src\TextOverlay.h" />
+    <ClInclude Include="src\Denoiser.h" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="shaders\Raytracing.hlsl" />
+    <None Include="shaders\Denoise.hlsl" />
   </ItemGroup>
 
   <!-- dxcompiler.dll / dxil.dll: DXR 런타임 셰이더 컴파일에 필요 -->

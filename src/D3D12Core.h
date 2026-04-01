@@ -10,9 +10,9 @@ public:
     void Init(HWND hwnd, uint32_t width, uint32_t height);
     void Shutdown();
 
-    // 프레임 시작 / 끝 (fps: 화면 표시용, 0이면 표시 안 함)
+    // 프레임 시작 / 끝 (fps: 화면 표시용, denoiserOn: 오버레이에 디노이저 상태 표시)
     void BeginFrame();
-    void EndFrame(float fps = 0.0f);
+    void EndFrame(float fps = 0.0f, bool denoiserOn = false);
 
     // 커맨드 리스트 제출 후 GPU 완전 대기 (Present 없음, 초기화용)
     void SubmitAndFlush();

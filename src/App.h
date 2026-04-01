@@ -5,6 +5,7 @@
 #include "DXRPipeline.h"
 #include "AccelerationStructure.h"
 #include "RenderTarget.h"
+#include "Denoiser.h"
 #include <chrono>
 
 class App
@@ -66,6 +67,10 @@ private:
     uint32_t m_width      = k_defaultWidth;
     uint32_t m_height     = k_defaultHeight;
     bool     m_sceneBuilt = false;
+
+    // 디노이저
+    Denoiser m_denoiser;
+    bool     m_denoiseEnabled = false;
 
     // 패스 트레이싱 누적
     uint32_t m_frameCount   = 0;

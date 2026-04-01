@@ -19,7 +19,8 @@ public:
     void Shutdown();
 
     // backBufferIdx: 현재 프레임의 백버퍼 인덱스
-    void DrawFPS(float fps, uint32_t backBufferIdx);
+    // denoiserOn: true면 "DNSR: ON" 표시
+    void DrawFPS(float fps, uint32_t backBufferIdx, bool denoiserOn = false);
 
     bool IsReady() const noexcept { return m_ready; }
 

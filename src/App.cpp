@@ -293,13 +293,17 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
     // 셰이더 테이블 빌드
     m_pipeline.BuildShaderTable(m_core.Device());
 
+    // 디노이저 초기화
+    m_denoiser.Init(m_core.Device(), width, height);
+
     m_sceneBuilt = true;
     std::println("[App] 초기화 완료 - 씬 0 (야외)");
-    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2 씬 전환, ESC 종료");
+    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, D 디노이저 토글, ESC 종료");
 }
 
 void App::Shutdown()
 {
+    m_denoiser.Shutdown();
     m_core.Shutdown();
 }
 
@@ -728,6 +732,14 @@ void App::OnKeyDown(uint32_t key)
     if (key == '1') SwitchScene(0);
     else if (key == '2') SwitchScene(1);
     else if (key == '3') SwitchScene(2);
+    else if (key == 'D')
+    {
+        m_denoiseEnabled        = !m_denoiseEnabled;
+        m_denoiser.enabled      = m_denoiseEnabled;
+        m_frameCount            = 0;  // 누적 초기화 (노이즈 기준이 달라지므로)
+        m_cameraMoved           = true;
+        std::println("[App] 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
+    }
 }
 
 // ---------------------------------------------------------------
@@ -797,10 +809,18 @@ void App::OnRender()
     // UAV 쓰기 완료 보장 (g_output + g_accumulation 모두 배리어)
     m_renderTarget.UAVBarriers(cmd);
 
+    // 디노이저가 활성화된 경우: g_accumulation → (A-trous 3패스) → g_output 덮어쓰기
+    if (m_denoiseEnabled)
+    {
+        m_denoiser.Apply(cmd,
+                         m_renderTarget.AccumResource(),
+                         m_renderTarget.Resource());
+    }
+
     // 결과를 백버퍼로 복사 후 Present
     m_renderTarget.CopyToBackBuffer(cmd, m_core.BackBuffer());
 
-    m_core.EndFrame(m_smoothFps);
+    m_core.EndFrame(m_smoothFps, m_denoiseEnabled);
 }
 
 void App::OnResize(uint32_t width, uint32_t height)
