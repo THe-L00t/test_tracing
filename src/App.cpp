@@ -420,6 +420,7 @@ void App::SwitchScene(uint32_t id)
     m_sceneID = id;
     m_frameCount  = 0;
     m_cameraMoved = true;
+    m_accumDirty  = true;  // 씬 내용이 바뀌므로 누적 버퍼 클리어 필요
 
     // GPU 완전 대기
     m_core.FlushGPU();
@@ -738,6 +739,7 @@ void App::OnKeyDown(uint32_t key)
         m_denoiser.enabled      = m_denoiseEnabled;
         m_frameCount            = 0;  // 누적 초기화 (노이즈 기준이 달라지므로)
         m_cameraMoved           = true;
+        m_accumDirty            = true;  // 디노이저 상태 변화 → 누적 버퍼 클리어 필요
         std::println("[App] 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
     }
 }
@@ -785,9 +787,12 @@ void App::OnRender()
     ID3D12DescriptorHeap* heaps[] = { m_core.CbvSrvUavHeap().Get() };
     cmd->SetDescriptorHeaps(1, heaps);
 
-    // 첫 프레임(씬 전환 / 카메라 이동 직후): 이전 씬 잔상 제거
-    if (m_frameCount == 0)
+    // 씬 전환 / 디노이저 토글 시: 이전 씬 잔상 제거
+    if (m_accumDirty)
+    {
         m_renderTarget.ClearAccumulation(cmd);
+        m_accumDirty = false;
+    }
 
     cmd->SetComputeRootSignature(m_globalRS.Get());
 
