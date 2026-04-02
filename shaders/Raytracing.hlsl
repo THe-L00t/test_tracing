@@ -215,70 +215,102 @@ float3 DirectLighting(float3 hitPos, float3 N, float3 albedo, float metallic, in
     return result;
 }
 
-// ── RayGen – 이터레이티브 경로 추적 ────────────────────────────
+// ── 중앙 포커스 샘플링 설정 ─────────────────────────────────────
+// 중앙 영역: NDC 거리 < k_centerRadius  → 16 spp
+// 사이드 영역: NDC 거리 >= k_centerRadius → 4프레임마다 1번 (1/4 spp)
+static const float k_centerRadius  = 0.5f;   // NDC 공간 반경 (화면 절반)
+static const uint  k_centerSamples = 16u;     // 중앙 샘플 수 (기존 × 16)
+// 사이드는 frameCount % 4 == 0 인 프레임에만 갱신 (기존 × 1/4)
+
+// ── RayGen – 중앙 포커스 경로 추적 ──────────────────────────────
 [shader("raygeneration")]
 void RayGen()
 {
     uint2 idx = DispatchRaysIndex().xy;
     uint2 dim = DispatchRaysDimensions().xy;
 
+    // 픽셀 중심 NDC (지터 없음, 영역 판별용)
+    float2 pixelCenter = ((float2)idx + 0.5f) / (float2)dim;
+    float2 ndcCenter   = float2(pixelCenter.x * 2.0f - 1.0f, 1.0f - pixelCenter.y * 2.0f);
+    bool   isCenter    = length(ndcCenter) < k_centerRadius;
+
+    // 사이드 영역: 4프레임마다 1번만 갱신 (1/4 샘플 효과)
+    if (!isCenter && (frameCount % 4u) != 0u)
+    {
+        float3 accumulated = g_accumulation[idx].rgb;
+        float3 color = accumulated / (accumulated + 1.0f);
+        color = pow(max(color, 0.0f), 1.0f / 2.2f);
+        g_output[idx] = float4(color, 1.0f);
+        return;
+    }
+
+    uint numSamples = isCenter ? k_centerSamples : 1u;
     uint seed = WangHash(idx.x + idx.y * dim.x + randomSeed * 719393u);
 
-    // 서브픽셀 지터 (안티에일리어싱)
-    float2 jitter = float2(RandFloat(seed), RandFloat(seed)) - 0.5f;
-    float2 uv     = ((float2)idx + 0.5f + jitter) / (float2)dim;
-    float2 ndc    = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    float3 totalRadiance = float3(0.0f, 0.0f, 0.0f);
 
-    float3 dir = normalize(
-        camForward +
-        camRight * (ndc.x * aspectRatio * tanHalfFovY) +
-        camUp    * (ndc.y * tanHalfFovY)
-    );
-
-    RayDesc ray;
-    ray.Origin    = camPos;
-    ray.Direction = dir;
-    ray.TMin      = 0.001f;
-    ray.TMax      = 1e6f;
-
-    float3 throughput = float3(1.0f, 1.0f, 1.0f);
-    float3 radiance   = float3(0.0f, 0.0f, 0.0f);
-
-    static const uint k_maxBounce = 8u;
-
-    for (uint bounce = 0u; bounce < k_maxBounce; bounce++)
+    for (uint s = 0u; s < numSamples; s++)
     {
-        RayPayload payload;
-        payload.emission      = float3(0.0f, 0.0f, 0.0f);
-        payload.attenuation   = float3(0.0f, 0.0f, 0.0f);
-        payload.nextOrigin    = float3(0.0f, 0.0f, 0.0f);
-        payload.nextDirection = float3(0.0f, 0.0f, 0.0f);
-        payload.seed          = seed;
-        payload.depth         = bounce;
-        payload.terminated    = 0u;
+        // 서브픽셀 지터 (안티에일리어싱)
+        float2 jitter = float2(RandFloat(seed), RandFloat(seed)) - 0.5f;
+        float2 uv     = ((float2)idx + 0.5f + jitter) / (float2)dim;
+        float2 ndc    = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
 
-        TraceRay(g_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
+        float3 dir = normalize(
+            camForward +
+            camRight * (ndc.x * aspectRatio * tanHalfFovY) +
+            camUp    * (ndc.y * tanHalfFovY)
+        );
 
-        seed = payload.seed;
-        radiance += throughput * payload.emission;
-
-        if (payload.terminated != 0u) break;
-
-        throughput *= payload.attenuation;
-
-        // Russian Roulette (bounce 3부터)
-        if (bounce >= 3u)
-        {
-            float rrProb = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.01f, 1.0f);
-            if (RandFloat(seed) > rrProb) break;
-            throughput /= rrProb;
-        }
-
-        ray.Origin    = payload.nextOrigin;
-        ray.Direction = payload.nextDirection;
+        RayDesc ray;
+        ray.Origin    = camPos;
+        ray.Direction = dir;
         ray.TMin      = 0.001f;
         ray.TMax      = 1e6f;
+
+        float3 throughput = float3(1.0f, 1.0f, 1.0f);
+        float3 radiance   = float3(0.0f, 0.0f, 0.0f);
+
+        static const uint k_maxBounce = 8u;
+
+        for (uint bounce = 0u; bounce < k_maxBounce; bounce++)
+        {
+            RayPayload payload;
+            payload.emission      = float3(0.0f, 0.0f, 0.0f);
+            payload.attenuation   = float3(0.0f, 0.0f, 0.0f);
+            payload.nextOrigin    = float3(0.0f, 0.0f, 0.0f);
+            payload.nextDirection = float3(0.0f, 0.0f, 0.0f);
+            payload.seed          = seed;
+            payload.depth         = bounce;
+            payload.terminated    = 0u;
+
+            TraceRay(g_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
+
+            seed = payload.seed;
+            radiance += throughput * payload.emission;
+
+            if (payload.terminated != 0u) break;
+
+            throughput *= payload.attenuation;
+
+            // Russian Roulette (bounce 3부터)
+            if (bounce >= 3u)
+            {
+                float rrProb = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.01f, 1.0f);
+                if (RandFloat(seed) > rrProb) break;
+                throughput /= rrProb;
+            }
+
+            ray.Origin    = payload.nextOrigin;
+            ray.Direction = payload.nextDirection;
+            ray.TMin      = 0.001f;
+            ray.TMax      = 1e6f;
+        }
+
+        totalRadiance += radiance;
     }
+
+    float3 radiance = totalRadiance / float(numSamples);
 
     // 시간적 누적
     float3 accumulated;
