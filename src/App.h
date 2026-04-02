@@ -75,6 +75,7 @@ private:
     // 패스 트레이싱 누적
     uint32_t m_frameCount   = 0;
     bool     m_cameraMoved  = true;
+    bool     m_accumDirty   = true;  // 씬 전환/디노이저 토글 시 누적 버퍼 클리어 필요
 
     // 마우스 캡처
     HWND     m_hwnd          = nullptr;
