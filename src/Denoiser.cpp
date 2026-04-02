@@ -172,21 +172,36 @@ void Denoiser::CreatePSO()
 
 // ---------------------------------------------------------------
 // 디스크립터 힙 슬롯 구성 (Apply 첫 호출 시 1회 실행)
-// [0]=SRV:accum  [1]=UAV:ping   → Pass 0 테이블 (base=slot 0)
-// [2]=SRV:ping   [3]=UAV:pong   → Pass 1 테이블 (base=slot 2)
-// [4]=SRV:pong   [5]=UAV:output → Pass 2 테이블 (base=slot 4)
-void Denoiser::BuildDescriptors(ID3D12Resource* accumResource,
+//
+// [0]=SRV:output(SDR) [1]=UAV:ping   → Pass 0 테이블 (base=slot 0)
+// [2]=SRV:ping        [3]=UAV:pong   → Pass 1 테이블 (base=slot 2)
+// [4]=SRV:pong        [5]=UAV:output → Pass 2 테이블 (base=slot 4)
+//
+// Pass 0 입력은 g_output(RGBA8_UNORM, SDR 0~1)을 사용한다.
+// g_accumulation(HDR)은 bilateral σ=0.3 범위를 초과해 가중치가 0에 수렴하므로
+// 톤맵이 완료된 SDR 버퍼를 필터링 입력으로 사용해야 효과가 있다.
+void Denoiser::BuildDescriptors(ID3D12Resource* /*accumResource*/,
                                 ID3D12Resource* outputResource)
 {
-    // RGBA32F SRV 공통 설정
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-    srvDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Format                        = DXGI_FORMAT_R32G32B32A32_FLOAT;
-    srvDesc.Texture2D.MipLevels           = 1;
-    srvDesc.Texture2D.MostDetailedMip     = 0;
-    srvDesc.Texture2D.PlaneSlice          = 0;
-    srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+    // RGBA8_UNORM SRV — g_output(SDR) 전용
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvSdrDesc{};
+    srvSdrDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvSdrDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvSdrDesc.Format                        = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvSdrDesc.Texture2D.MipLevels           = 1;
+    srvSdrDesc.Texture2D.MostDetailedMip     = 0;
+    srvSdrDesc.Texture2D.PlaneSlice          = 0;
+    srvSdrDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+    // RGBA32F SRV — 핑퐁 버퍼 전용
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvF32Desc{};
+    srvF32Desc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvF32Desc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvF32Desc.Format                        = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    srvF32Desc.Texture2D.MipLevels           = 1;
+    srvF32Desc.Texture2D.MostDetailedMip     = 0;
+    srvF32Desc.Texture2D.PlaneSlice          = 0;
+    srvF32Desc.Texture2D.ResourceMinLODClamp = 0.0f;
 
     // RGBA32F UAV (ping, pong)
     D3D12_UNORDERED_ACCESS_VIEW_DESC uavF32{};
@@ -200,11 +215,11 @@ void Denoiser::BuildDescriptors(ID3D12Resource* accumResource,
 
     auto cpu = [&](uint32_t i) { return m_heap.GetHandle(i).cpu; };
 
-    m_device->CreateShaderResourceView(accumResource,   &srvDesc, cpu(0)); // SRV:accum
+    m_device->CreateShaderResourceView(outputResource, &srvSdrDesc, cpu(0)); // SRV:output(SDR) ← 핵심 수정
     m_device->CreateUnorderedAccessView(m_ping.Get(),   nullptr, &uavF32, cpu(1)); // UAV:ping
-    m_device->CreateShaderResourceView(m_ping.Get(),    &srvDesc, cpu(2)); // SRV:ping
+    m_device->CreateShaderResourceView(m_ping.Get(),    &srvF32Desc, cpu(2)); // SRV:ping
     m_device->CreateUnorderedAccessView(m_pong.Get(),   nullptr, &uavF32, cpu(3)); // UAV:pong
-    m_device->CreateShaderResourceView(m_pong.Get(),    &srvDesc, cpu(4)); // SRV:pong
+    m_device->CreateShaderResourceView(m_pong.Get(),    &srvF32Desc, cpu(4)); // SRV:pong
     m_device->CreateUnorderedAccessView(outputResource, nullptr, &uavR8,  cpu(5)); // UAV:output
 
     m_descriptorsBuilt = true;
@@ -262,10 +277,11 @@ void Denoiser::Apply(ID3D12GraphicsCommandList4* cmdList,
         cmdList->ResourceBarrier(1, &b);
     };
 
-    // ── Pass 0 (step=1): accum → ping ────────────────────────────
-    uavToSrv(accumResource);                // accum: UAV → SRV
+    // ── Pass 0 (step=1): g_output(SDR) → ping ────────────────────
+    // g_output은 레이트레이싱 후 UAV 상태 → SRV로 전환해 읽기
+    uavToSrv(outputResource);
     {
-        CB cb{ m_width, m_height, 1, 0.3f, 0 };
+        CB cb{ m_width, m_height, 1, 0.1f, 0 };
         cmdList->SetComputeRoot32BitConstants(0, 5, &cb, 0);
         cmdList->SetComputeRootDescriptorTable(1, m_heap.GetHandle(0).gpu);
         cmdList->Dispatch(gx, gy, 1);
@@ -275,7 +291,7 @@ void Denoiser::Apply(ID3D12GraphicsCommandList4* cmdList,
 
     // ── Pass 1 (step=2): ping → pong ─────────────────────────────
     {
-        CB cb{ m_width, m_height, 2, 0.3f, 0 };
+        CB cb{ m_width, m_height, 2, 0.1f, 0 };
         cmdList->SetComputeRoot32BitConstants(0, 5, &cb, 0);
         cmdList->SetComputeRootDescriptorTable(1, m_heap.GetHandle(2).gpu);
         cmdList->Dispatch(gx, gy, 1);
@@ -283,17 +299,21 @@ void Denoiser::Apply(ID3D12GraphicsCommandList4* cmdList,
     uavBarrier(m_pong.Get());
     uavToSrv(m_pong.Get());                 // pong: UAV → SRV
 
-    // ── Pass 2 (step=4, final): pong → g_output + tonemap ────────
+    // ── Pass 2 (step=4, final): pong → g_output ──────────────────
+    // g_output을 쓰기 위해 SRV → UAV 전환
+    srvToUav(outputResource);
     {
-        CB cb{ m_width, m_height, 4, 0.3f, 1 };
+        // 입력이 이미 SDR이므로 tonemap 불필요 (doTonemap=0)
+        CB cb{ m_width, m_height, 4, 0.1f, 0 };
         cmdList->SetComputeRoot32BitConstants(0, 5, &cb, 0);
         cmdList->SetComputeRootDescriptorTable(1, m_heap.GetHandle(4).gpu);
         cmdList->Dispatch(gx, gy, 1);
     }
     uavBarrier(outputResource);             // g_output UAV 쓰기 완료 보장
 
-    // ── 상태 복원 (다음 프레임 DispatchRays를 위해 모두 UAV로) ───
-    srvToUav(accumResource);
+    // ── 상태 복원 (다음 프레임 DispatchRays를 위해 핑퐁을 UAV로) ─
+    // outputResource: 이미 UAV 상태 (Pass 2에서 srvToUav 후 UAV 배리어)
+    // accumResource:  Apply에서 건드리지 않으므로 복원 불필요
     srvToUav(m_ping.Get());
     srvToUav(m_pong.Get());
 }

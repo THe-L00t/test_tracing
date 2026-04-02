@@ -11,9 +11,9 @@
 //   Shutdown()    → 해제
 //
 // 내부 패스:
-//   Pass 0 (step=1): g_accumulation → ping
-//   Pass 1 (step=2): ping           → pong
-//   Pass 2 (step=4): pong           → g_output  (+Reinhard 톤맵)
+//   Pass 0 (step=1): g_output(SDR) → ping   ← bilateral σ=0.1 (SDR 0~1 기준)
+//   Pass 1 (step=2): ping          → pong
+//   Pass 2 (step=4): pong          → g_output  (tonemap 없음, SDR 그대로 출력)
 class Denoiser
 {
 public:
@@ -45,7 +45,7 @@ private:
     ComPtr<ID3D12Resource> m_pong;
 
     // 디스크립터 힙 (6 슬롯, shader-visible CBV/SRV/UAV)
-    // [0,1] = [SRV:accum,  UAV:ping]    → Pass 0 테이블 베이스
+    // [0,1] = [SRV:output(SDR), UAV:ping]  → Pass 0 테이블 베이스
     // [2,3] = [SRV:ping,   UAV:pong]    → Pass 1 테이블 베이스
     // [4,5] = [SRV:pong,   UAV:output]  → Pass 2 테이블 베이스
     DescriptorHeap m_heap;
