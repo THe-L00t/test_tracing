@@ -60,7 +60,30 @@ void RenderTarget::Init(ID3D12Device* device, DescriptorHeap& heap,
         uavDesc.Format        = DXGI_FORMAT_R32G32B32A32_FLOAT;
         device->CreateUnorderedAccessView(
             m_accumulation.Get(), nullptr, &uavDesc, m_accumHandle.cpu);
+
+        // ClearUnorderedAccessViewFloat 전용 non-shader-visible CPU 핸들
+        // (API 요구사항: ViewCPUHandle은 non-visible 힙에서 와야 함)
+        m_clearHeap.Init(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1, false);
+        m_accumClearCPU = m_clearHeap.Allocate().cpu;
+        device->CreateUnorderedAccessView(
+            m_accumulation.Get(), nullptr, &uavDesc, m_accumClearCPU);
     }
+}
+
+void RenderTarget::ClearAccumulation(ID3D12GraphicsCommandList* cmdList)
+{
+    const float zeros[4] = {};
+    cmdList->ClearUnorderedAccessViewFloat(
+        m_accumHandle.gpu,   // shader-visible GPU 핸들
+        m_accumClearCPU,     // non-shader-visible CPU 핸들
+        m_accumulation.Get(),
+        zeros, 0, nullptr);
+
+    // 클리어 완료 후 DispatchRays의 UAV 접근과 동기화
+    D3D12_RESOURCE_BARRIER b{};
+    b.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    b.UAV.pResource = m_accumulation.Get();
+    cmdList->ResourceBarrier(1, &b);
 }
 
 void RenderTarget::UAVBarriers(ID3D12GraphicsCommandList* cmdList)

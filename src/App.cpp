@@ -732,7 +732,7 @@ void App::OnKeyDown(uint32_t key)
     if (key == '1') SwitchScene(0);
     else if (key == '2') SwitchScene(1);
     else if (key == '3') SwitchScene(2);
-    else if (key == 'D')
+    else if (key == 'R')
     {
         m_denoiseEnabled        = !m_denoiseEnabled;
         m_denoiser.enabled      = m_denoiseEnabled;
@@ -784,6 +784,11 @@ void App::OnRender()
     // 디스크립터 힙 바인딩
     ID3D12DescriptorHeap* heaps[] = { m_core.CbvSrvUavHeap().Get() };
     cmd->SetDescriptorHeaps(1, heaps);
+
+    // 첫 프레임(씬 전환 / 카메라 이동 직후): 이전 씬 잔상 제거
+    if (m_frameCount == 0)
+        m_renderTarget.ClearAccumulation(cmd);
+
     cmd->SetComputeRootSignature(m_globalRS.Get());
 
     // 파라미터 0: 디스크립터 테이블 (힙 슬롯 0부터 - UAV + SRVs)
