@@ -215,27 +215,39 @@ float3 DirectLighting(float3 hitPos, float3 N, float3 albedo, float metallic, in
     return result;
 }
 
-// ── 중앙 포커스 샘플링 설정 ─────────────────────────────────────
-// 중앙 영역: NDC 거리 < k_centerRadius  → 16 spp
-// 사이드 영역: NDC 거리 >= k_centerRadius → 4프레임마다 1번 (1/4 spp)
-static const float k_centerRadius  = 0.5f;   // NDC 공간 반경 (화면 절반)
-static const uint  k_centerSamples = 16u;     // 중앙 샘플 수 (기존 × 16)
-// 사이드는 frameCount % 4 == 0 인 프레임에만 갱신 (기존 × 1/4)
+// ── 가우시안 포커스 샘플링 설정 ─────────────────────────────────
+// NDC 거리에 따라 spp를 가우시안으로 연속 변화:
+//   sppFloat = k_maxSamples * exp(-dist² / k_gaussSigma²)
+//   dist=0.0 → sppFloat=16,  dist=0.6 → ~1,  dist>=1.0 → <0.25
+// 소수점은 확률적 올림(stochastic rounding)으로 정수 샘플 수 결정.
+// sppFloat<1 이면 해당 확률로만 레이를 쏘고, 나머지 프레임은 누적값 재사용.
+static const float k_maxSamples  = 16.0f;  // 화면 중심 최대 spp
+static const float k_gaussSigma  = 0.6f;   // 가우시안 폭 (NDC 단위)
 
-// ── RayGen – 중앙 포커스 경로 추적 ──────────────────────────────
+// ── RayGen – 가우시안 포커스 경로 추적 ──────────────────────────
 [shader("raygeneration")]
 void RayGen()
 {
     uint2 idx = DispatchRaysIndex().xy;
     uint2 dim = DispatchRaysDimensions().xy;
 
-    // 픽셀 중심 NDC (지터 없음, 영역 판별용)
+    // 픽셀 중심 NDC (지터 없음, 가중치 계산용)
     float2 pixelCenter = ((float2)idx + 0.5f) / (float2)dim;
     float2 ndcCenter   = float2(pixelCenter.x * 2.0f - 1.0f, 1.0f - pixelCenter.y * 2.0f);
-    bool   isCenter    = length(ndcCenter) < k_centerRadius;
 
-    // 사이드 영역: 4프레임마다 1번만 갱신 (1/4 샘플 효과)
-    if (!isCenter && (frameCount % 4u) != 0u)
+    // 가우시안 가중치 → 연속 spp 계산
+    float dist      = length(ndcCenter);
+    float gaussW    = exp(-dist * dist / (k_gaussSigma * k_gaussSigma));
+    float sppFloat  = k_maxSamples * gaussW;   // 0 ~ 16 연속값
+
+    // 확률적 올림: floor(sppFloat) + frac 확률로 +1
+    uint  seed      = WangHash(idx.x + idx.y * dim.x + randomSeed * 719393u);
+    uint  sppBase   = uint(sppFloat);
+    float sppFrac   = sppFloat - float(sppBase);
+    uint  numSamples = sppBase + (RandFloat(seed) < sppFrac ? 1u : 0u);
+
+    // spp=0 이면 이번 프레임 스킵 (누적값 그대로 출력)
+    if (numSamples == 0u)
     {
         float3 accumulated = g_accumulation[idx].rgb;
         float3 color = accumulated / (accumulated + 1.0f);
@@ -243,9 +255,6 @@ void RayGen()
         g_output[idx] = float4(color, 1.0f);
         return;
     }
-
-    uint numSamples = isCenter ? k_centerSamples : 1u;
-    uint seed = WangHash(idx.x + idx.y * dim.x + randomSeed * 719393u);
 
     float3 totalRadiance = float3(0.0f, 0.0f, 0.0f);
 
