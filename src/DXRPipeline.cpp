@@ -157,10 +157,10 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
     hitGroup.ClosestHitShaderImport = L"ClosestHit";
 
     // 3. 셰이더 설정
-    //    RayPayload: float3×4 + uint×3 = 48 + 12 = 60 bytes
+    //    RayPayload: float3×4 + float(scatterPdf) + uint×3 = 48+4+12 = 64 bytes
     //    ShadowPayload: float = 4 bytes
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig{};
-    shaderConfig.MaxPayloadSizeInBytes   = 60;  // RayPayload 크기
+    shaderConfig.MaxPayloadSizeInBytes   = 64;  // RayPayload 크기
     shaderConfig.MaxAttributeSizeInBytes = sizeof(float) * 2;  // 배리센트릭
 
     // 4. 파이프라인 설정
