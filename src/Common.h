@@ -110,3 +110,59 @@ struct alignas(16) SceneCB
 };
 // 검증: 64+32+32+64+16+16+16+16 = 256
 static_assert(sizeof(SceneCB) == 256, "SceneCB must be 256 bytes");
+
+// ──────────────────────────────────────────────────────────────
+//  ReSTIR 전용 상수 버퍼 (b1, 128바이트)
+//  SceneCB가 꽉 차 있으므로 ReSTIR 파라미터는 별도 CBV로 분리
+// ──────────────────────────────────────────────────────────────
+struct alignas(16) ReSTIRCB
+{
+    // 이전 프레임 카메라 (재투영용) (64)
+    float    prevCamPos[3];      float _p0;
+    float    prevCamRight[3];    float prevTanHalfFovY;
+    float    prevCamUp[3];       float prevAspectRatio;
+    float    prevCamForward[3];  float _p1;
+
+    // ReSTIR 파라미터 (32)
+    uint32_t lightCount;         // 씬 광원 총 개수
+    uint32_t candidateCount;     // RIS 후보 수 M (기본 32)
+    uint32_t screenW;
+    uint32_t screenH;
+    uint32_t frameIndex;
+    float    temporalMaxM;       // 시간적 누적 M 클램프 (ghosting 방지, 기본 30)
+    uint32_t spatialRadius;      // 공간 재사용 반경 (픽셀, 기본 30)
+    uint32_t spatialSamples;     // 공간 재사용 이웃 샘플 수 (기본 5)
+
+    // 패딩 (32)
+    float    _pad[8];
+};
+static_assert(sizeof(ReSTIRCB) == 128, "ReSTIRCB must be 128 bytes");
+
+// ──────────────────────────────────────────────────────────────
+//  광원 데이터 (StructuredBuffer<LightData>, t5)
+//  SceneCB의 하드코딩 광원을 대체 – ReSTIR은 동적 광원 리스트 필요
+// ──────────────────────────────────────────────────────────────
+struct LightData
+{
+    float    pos[3];       // 포인트/스팟: 위치, 방향광: 정규화 방향
+    float    intensity;
+    float    color[3];
+    uint32_t type;         // 0=point, 1=directional, 2=area(box)
+    // area light 전용
+    float    halfSize;     // box half-extent (type==2일 때)
+    float    center[3];    // box center      (type==2일 때)
+};
+// 32 bytes, StructuredBuffer stride = 32
+
+// ──────────────────────────────────────────────────────────────
+//  Reservoir (GPU StructuredBuffer, 16바이트 정렬)
+//  RIS 가중치 합산 및 선택된 광원 샘플 저장
+// ──────────────────────────────────────────────────────────────
+struct alignas(16) Reservoir
+{
+    uint32_t lightIdx;   // 선택된 광원 인덱스 (UINT_MAX = 유효하지 않음)
+    float    wSum;       // 누적 가중치 Σw_i
+    float    W;          // 비편향 기여 가중치 = wSum / (M * p_hat(y))
+    uint32_t M;          // 시도한 후보 수
+};
+static_assert(sizeof(Reservoir) == 16, "Reservoir must be 16 bytes");

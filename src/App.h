@@ -6,6 +6,7 @@
 #include "AccelerationStructure.h"
 #include "RenderTarget.h"
 #include "Denoiser.h"
+#include "ReSTIRPass.h"
 #include <chrono>
 
 class App
@@ -71,6 +72,21 @@ private:
     // 디노이저
     Denoiser m_denoiser;
     bool     m_denoiseEnabled = false;
+
+    // ── ReSTIR ────────────────────────────────────────────────
+    // TODO [Session 1]: ReSTIR 활성화 플래그 (R키 토글, 기본 false)
+    ReSTIRPass m_restir;
+    bool       m_restirEnabled = false;
+
+    // GBuffer + Final Shade 용 별도 DXR PSO
+    // (기존 m_pipeline은 classic PT 유지)
+    ComPtr<ID3D12StateObject>           m_gbufferPSO;   // GBuffer.hlsl
+    ComPtr<ID3D12StateObjectProperties> m_gbufferPSOProps;
+    ComPtr<ID3D12StateObject>           m_shadePSO;     // ReSTIR_Shade.hlsl
+    ComPtr<ID3D12StateObjectProperties> m_shadePSOProps;
+
+    // ReSTIR 이전 프레임 카메라 (재투영용)
+    Camera   m_prevCamera;
 
     // 패스 트레이싱 누적
     uint32_t m_frameCount   = 0;
