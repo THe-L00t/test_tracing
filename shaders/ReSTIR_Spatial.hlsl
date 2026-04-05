@@ -137,12 +137,27 @@ void CS_Spatial(uint3 tid : SV_DispatchThreadID)
 
         if (R_q.lightIdx == 0xFFFFFFFFu) continue;
 
-        // TODO [Session 2]:
-        // 1. CalcJacobian(hitPos_p, wPos_q.xyz, lightPos, lightNormal) 계산
-        // 2. pHat_q = EvalTargetPDF(현재표면, R_q.lightIdx) * Jacobian
-        // 3. MergeReservoir(R_out, R_q, pHat_q, seed)
+        // ▶ Jacobian 보정 병합 (Bitterli 2020, Algorithm 4, line 7 + Eq.(11)):
+        //   이웃 q 에서 선택된 광원 y 를 픽셀 p 에서 재평가할 때,
+        //   q의 입체각 측도를 p의 측도로 변환:
+        //
+        //   J(q→p) = |cos θ_q| · dist(x_p, y)²
+        //             ─────────────────────────────
+        //             |cos θ_p| · dist(x_q, y)²
+        //
+        //   실제 기여 가중치:
+        //     pHat_q_at_p = EvalTargetPDF(x_p 표면, y) * J(q→p)
+        //
+        //   MergeReservoir 호출 시 전달:
+        //     MergeReservoir(R_out, R_q, pHat_q_at_p, seed)
+        //
+        //   ※ Point light: CalcJacobian에서 cosQ=cosP 취소되어
+        //       J = dist(x_p,y)² / dist(x_q,y)²  로 단순화 (Common_ReSTIR.hlsli 참조)
+        //   ※ CalcJacobian은 현재 STUB(return 1.0) → Session 2에서 구현
 
         LightData light_q = g_lightList[R_q.lightIdx];
+        // TODO [Session 2]: lightNormal은 area light 법선; point light라면 임의값 사용 가능
+        // (CalcJacobian 내부에서 point light 분기 처리 권장)
         float Jacobian    = CalcJacobian(hitPos_p, wPos_q.xyz, light_q.pos, light_q.pos);  // STUB normal
         float pHat_q      = EvalTargetPDF(hitPos_p, N_p, V_p, albedo_p, metallic_p, roughness_p, light_q);
         pHat_q *= Jacobian;

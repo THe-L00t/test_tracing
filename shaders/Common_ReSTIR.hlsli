@@ -101,11 +101,38 @@ struct LightData
 // ReSTIR에서 샘플 품질을 나타내는 스칼라 (unshadowed radiance)
 // 가시성 검사는 포함하지 않음 (Final Shade 단계에서 처리)
 //
-// TODO [Session 1]: GBuffer에서 읽은 표면 정보로 p_hat 계산
-// 수식: p_hat = |f_r(V,L,N)| * NdotL * Li
-//   f_r : GGX BRDF (Raytracing.hlsl의 EvalBRDF와 동일 로직)
-//   NdotL: max(dot(N,L), 0)
-//   Li   : light.color * light.intensity / dist^2  (point)
+// ▶ 논문 근거 (Bitterli et al. 2020, "Spatiotemporal reservoir resampling
+//              for real-time ray tracing with dynamic direct lighting"):
+//   Eq.(1): p̂(y) ∝ ρ(x,y) = f(x,ω_x→y) · G(x↔y) · L_e(y→x)
+//   여기서 가시성 V(x,y)는 제외 (Biased estimator accepted for performance)
+//
+// ▶ 실용 공식 (Bitterli 2020 Supplemental + Talbot 2005):
+//   p̂(y) = luma( f_r(V,L,N) · L_i(y) · NdotL )
+//
+//   단계별 계산:
+//   1) 광원 방향 L, 거리 dist 계산:
+//        point:  L = normalize(light.pos - hitPos)
+//                Li = light.color * light.intensity / (dist * dist)
+//        dir:    L = normalize(light.pos)   // 이미 정규화된 방향 저장
+//                Li = light.color * light.intensity
+//   2) NdotL = max(dot(N, L), 0)
+//   3) f_r(V,L,N) = GGX Cook-Torrance:
+//        H  = normalize(V + L)
+//        D  = D_GGX(NdotH, alpha2)           // alpha = roughness^2
+//        G  = G1_Smith(NdotV, alpha2) * G1_Smith(NdotL, alpha2)
+//        F  = SchlickF(VdotH, F0)            // F0 = lerp(0.04, albedo, metallic)
+//        f_spec = D * G * F / (4 * NdotV * NdotL)
+//        f_diff = albedo * INV_PI * (1 - metallic) * (1 - F)
+//        f_r = f_spec + f_diff
+//   4) p̂ = luma(f_r * Li * NdotL)
+//        luma = 0.2126*R + 0.7152*G + 0.0722*B  (BT.709 권장)
+//        또는 dot(val, float3(0.2126, 0.7152, 0.0722))
+//
+//   ※ 구현 참조: feature/pbr-path-tracing 브랜치 Raytracing.hlsl
+//     D_GGX / G1_Smith / SchlickF / EvalBRDFPdf 함수와 동일 수식
+//     해당 함수를 Common_ReSTIR.hlsli에 복사하거나, 별도 BRDFUtil.hlsli 분리
+//
+// TODO [Session 1]: 아래 스텁을 실제 PBR BRDF 평가로 교체
 float EvalTargetPDF(float3 hitPos, float3 N, float3 V,
                     float3 albedo, float metallic, float roughness,
                     LightData light)
@@ -118,8 +145,40 @@ float EvalTargetPDF(float3 hitPos, float3 N, float3 V,
 // ── Jacobian 보정 (공간 재사용용) ────────────────────────────
 // 이웃 픽셀 q 에서 가져온 광원 샘플을 현재 픽셀 p 에 재사용할 때
 // 입체각 측도 변환에 필요한 Jacobian 행렬식
-// J = |cos(θ_q)| * dist_p^2 / (|cos(θ_q'_at_p)| * dist_q^2)
-// 단순화: Jacobian = cos_at_light_q * dist_p^2 / (cos_at_light_p * dist_q^2)
+//
+// ▶ 논문 근거 (Bitterli et al. 2020, Eq.(11)):
+//   공간 재사용 시 q의 domain에서 샘플링된 광원 y를
+//   p의 domain으로 변환할 때의 입체각 비율:
+//
+//   J(q→p) = |cos θ_q| · dist(x_p, y)²
+//             ─────────────────────────────
+//             |cos θ_p| · dist(x_q, y)²
+//
+//   기호 정의:
+//     y        = 선택된 광원 샘플 위치  (lightPos)
+//     x_p      = 현재 픽셀 p의 표면 히트 포인트  (hitPos_p)
+//     x_q      = 이웃 픽셀 q의 표면 히트 포인트  (hitPos_q)
+//     lightNormal = 광원 표면 법선 (area light용; point light는 임의)
+//     θ_q      = y에서 (y→x_q) 방향과 lightNormal 사이 각도
+//     θ_p      = y에서 (y→x_p) 방향과 lightNormal 사이 각도
+//     dist(a,b) = ||a - b||₂
+//
+//   계산 단계:
+//     float3 dir_q = normalize(hitPos_q - lightPos);
+//     float3 dir_p = normalize(hitPos_p - lightPos);
+//     float  cosQ  = abs(dot(lightNormal, dir_q));
+//     float  cosP  = abs(dot(lightNormal, dir_p));
+//     float  distP = length(hitPos_p - lightPos);
+//     float  distQ = length(hitPos_q - lightPos);
+//     J = (cosQ * distP * distP) / max(cosP * distQ * distQ, 1e-8f);
+//     J = clamp(J, 0.0f, 1e4f);  // 극단값 방지
+//
+//   ▶ Point light 단순화 (법선 정보 없음 → cosQ = cosP 가정):
+//     J_point(q→p) = dist(x_p, y)² / dist(x_q, y)²
+//
+//   ▶ 사용 위치: ReSTIR_Spatial.hlsl CS_Spatial 내
+//     pHat_q_at_p = EvalTargetPDF(x_p, R_q.lightIdx) * CalcJacobian(...)
+//     (Bitterli 2020, Algorithm 4, line 7)
 //
 // TODO [Session 2]: 아래를 실제 Jacobian으로 교체
 float CalcJacobian(float3 hitPos_p, float3 hitPos_q,

@@ -78,6 +78,8 @@ void CS_Initial(uint3 tid : SV_DispatchThreadID)
     float  roughness = matInf.r;
 
     // TODO [Session 1]: 카메라 위치에서 V 복원 (SceneCB.camPos 필요)
+    // SceneCB b0 에 camPos(float3)가 있으므로 cbuffer 선언 수정 후:
+    //   float3 V = normalize(camPos - hitPos);
     float3 V = float3(0, 1, 0);   // STUB – SceneCB.camPos - hitPos 정규화로 교체
 
     // RNG 초기화
@@ -86,6 +88,23 @@ void CS_Initial(uint3 tid : SV_DispatchThreadID)
     Reservoir R = MakeEmptyReservoir();
 
     // ── RIS 메인 루프 ────────────────────────────────────────
+    // ▶ 논문 근거 (Talbot et al. 2005, "Importance Resampling for Global Illumination",
+    //             Algorithm 2, "Weighted Reservoir Sampling"):
+    //   목표: target PDF p̂(x) 에 비례하여 M개 후보 중 하나를 선택
+    //   source PDF: q(x) = 1/lightCount  (균일 분포)
+    //
+    //   가중치 공식 (Talbot 2005, Eq.(3)):
+    //     w_i = p̂(x_i) / q(x_i) = p̂(x_i) · lightCount
+    //
+    //   WRS 업데이트 (Vitter 1985, "Random Sampling with a Reservoir"):
+    //     R.wSum += w_i
+    //     if (Uniform[0,1) < w_i / R.wSum): R.lightIdx = i
+    //
+    //   최종 비편향 가중치 (Talbot 2005, Algorithm 2, line 8):
+    //     R.W = (1/p̂(R.lightIdx)) · (R.wSum / R.M)
+    //         = R.wSum / (R.M · p̂(y_selected))
+    //   이는 FinalizeReservoir()가 담당 (아래 참조)
+    //
     // TODO [Session 1]: M개 후보 광원을 균일 샘플링하고 p_hat 가중치로 UpdateReservoir
     for (uint i = 0u; i < candidateCount; i++)
     {

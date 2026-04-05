@@ -164,8 +164,30 @@ void RayGen_Shade()
         {
             float vis = ShadowVis(hitPos + N * 0.001f, L, dist - 0.01f);
 
+            // ▶ 최종 직접광 공식 (Bitterli et al. 2020, Eq.(5)):
+            //   L_direct = f_r(V, L, N) · L_i(y) · NdotL · vis · R.W
+            //
+            //   R.W = wSum / (M · p̂(y_selected))   [Talbot 2005, Alg.2 line 8]
+            //     → FinalizeReservoir()가 매 패스 마지막에 갱신
+            //     → R.W는 이미 계산된 상태로 Reservoir에 저장됨
+            //
+            //   f_r(V, L, N) = GGX Cook-Torrance:
+            //     H  = normalize(V + L)
+            //     F0 = lerp(float3(0.04), albedo, metallic)
+            //     F  = SchlickF(saturate(dot(V, H)), F0)        // Schlick 근사
+            //     D  = D_GGX(NdotH, alpha2)                     // alpha = roughness²
+            //     G  = G1_Smith(NdotV, alpha2) * G1_Smith(NdotL, alpha2)
+            //     spec = (D * G * F) / (4 * NdotV * NdotL + 1e-5f)
+            //     diff = albedo * INV_PI * (1 - metallic) * (1 - F)
+            //     f_r  = spec + diff
+            //
+            //   ※ EvalDeltaLight() in feature/pbr-path-tracing/Raytracing.hlsl 가
+            //     위 계산을 이미 구현함. 해당 함수 시그니처:
+            //       float3 EvalDeltaLight(float3 N, float3 V, float3 L, float3 Li,
+            //                             float3 albedo, float metallic, float alpha2)
+            //     → alpha2 = roughness^4  (Disney α = roughness², α² = roughness⁴)
+            //
             // TODO [Session 3]: 아래 STUB를 GGX PBR BRDF 평가로 교체
-            // 참조: feature/pbr-path-tracing 의 EvalDeltaLight 함수
             float3 V = normalize(camPos - hitPos);
             float3 brdf = albedo / 3.14159f;  // STUB: Lambertian
 
@@ -176,6 +198,22 @@ void RayGen_Shade()
 
     // ── 간접광 (1 bounce, optional) ──────────────────────────
     float3 indirectLight = float3(0, 0, 0);
+    // ▶ 간접광 1-bounce (선택적, Bitterli 2020 Section 4.4 "Indirect Illumination"):
+    //   ReSTIR DI는 직접광만 처리하므로, 간접광은 별도 1-bounce PT로 추가.
+    //   수식:
+    //     L_indirect = ∫ f_r(ω_o, ω_i) · L_i(ω_i) · cosθ_i  dω_i
+    //   Monte Carlo 추정:
+    //     L_indirect ≈ (f_r(V, scatterDir, N) / pdf) · TraceRay(hitPos, scatterDir)
+    //   → SampleBRDF()가 attenuation = f_r * NdotL / pdf 를 반환
+    //
+    //   VNDF 중요도 샘플링 (Heitz 2018):
+    //     SampleBRDF(N, V, albedo, metallic, roughness, seed, atten, pdf)
+    //     → scatterDir, atten = f_r * NdotL / pdf (Raytracing.hlsl 참조)
+    //
+    //   ClosestHit에서 emission만 반환하는 단순 모드가 필요:
+    //     RayPayload { emission, terminated=1, ... }
+    //     indirectLight = atten * payload.emission
+    //
     // TODO [Session 3]:
     // uint seed = (idx.x * 1973u + idx.y * 9277u + frameIndex * 26699u) | 1u;
     // float3 V = normalize(camPos - hitPos);

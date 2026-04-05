@@ -69,8 +69,48 @@ static const float k_normalThreshold = 0.906f;  // cos(25도) ≈ 0.906
 bool Reproject(uint2 px, float curDepth, float3 curN,
                out int2 prevPx)
 {
+    // ▶ 재투영 수식 (Bitterli 2020, Section 4.3 + 표준 역투영 공식):
+    //
+    //   목표: 현재 프레임 픽셀 px 의 월드 위치를 이전 카메라로 투영하여
+    //         이전 프레임에서 같은 표면 샘플을 찾는다.
+    //
+    //   ReSTIRCB._prevCam 구조 (b1, Common.h ReSTIRCB):
+    //     _prevCam[0].xyz = prevCamPos      (이전 카메라 위치)
+    //     _prevCam[1].xyz = prevCamRight    [1].w = prevTanHalfFovY
+    //     _prevCam[2].xyz = prevCamUp       [2].w = prevAspectRatio
+    //     _prevCam[3].xyz = prevCamForward
+    //
+    //   계산 단계:
+    //     float3 worldPos = gbuf_worldPos[px].xyz;
+    //     float3 delta    = worldPos - _prevCam[0].xyz;        // 이전 캠 기준 방향
+    //     float  prevViewZ = dot(delta, _prevCam[3].xyz);      // 이전 view space Z
+    //     if (prevViewZ <= 0) return false;                     // 카메라 뒤
+    //
+    //     float  prevTanHFov    = _prevCam[1].w;
+    //     float  prevAspect     = _prevCam[2].w;
+    //     float  prevNDC_x = dot(delta, _prevCam[1].xyz)
+    //                         / (prevViewZ * prevAspect * prevTanHFov);
+    //     float  prevNDC_y = dot(delta, _prevCam[2].xyz)
+    //                         / (prevViewZ * prevTanHFov);
+    //
+    //     // NDC[-1,1] → UV[0,1] → 픽셀 좌표
+    //     float2 prevUV  = float2(prevNDC_x, -prevNDC_y) * 0.5f + 0.5f;
+    //     prevPx = int2(prevUV * float2(screenW, screenH));
+    //
+    //     // 화면 범위 + 표면 연속성 검사
+    //     if (!IsValidPixel(prevPx, screenW, screenH)) return false;
+    //     float prevDepth = gbuf_matInfo[uint2(prevPx)].g;
+    //     float3 prevN    = gbuf_normal[uint2(prevPx)].xyz;
+    //     bool depthOk  = abs(prevDepth - curDepth) / max(curDepth, 1e-4f) < k_depthThreshold;
+    //     bool normalOk = dot(prevN, curN) > k_normalThreshold;
+    //     return depthOk && normalOk;
+    //
+    //   ※ motionVec (u8/t10) 는 GBuffer 패스에서 계산 가능 (선택적):
+    //     motionVec[px] = prevUV - curUV  (화면공간 오프셋)
+    //     여기서 직접 계산하는 방식이 더 단순함 (motionVec 없어도 동작)
+
     // TODO [Session 2]:
-    // 1. motionVec[px] 읽기
+    // 1. motionVec[px] 읽기 (또는 위 수식으로 직접 재투영)
     // 2. prevPx = px + round(motionVec)
     // 3. 유효 범위 검사 (IsValidPixel)
     // 4. 이전 G-Buffer 읽어 깊이/법선 비교
@@ -116,9 +156,20 @@ void CS_Temporal(uint3 tid : SV_DispatchThreadID)
         uint  prevIdx  = PixelIndex(uint2(prevPx), screenW);
         Reservoir R_prev = reservoir_prev[prevIdx];
 
-        // TODO [Session 2]: Ghosting 방지 – M 클램프
+        // ▶ M-클램프 (Bitterli 2020, Section 4.3 "Preventing Temporal Lag"):
+        //   R_prev.M 를 현재 R_cur.M 의 temporalMaxM 배 이하로 제한.
+        //   이유: M이 너무 크면 이전 프레임 가중치가 압도적으로 커져
+        //         씬 변화/카메라 이동 시 고스팅(temporal lag) 발생.
+        //   권장값: temporalMaxM = 20.0  (논문 Section 4.3 실험값)
+        //   공식:   R_prev.M = min(R_prev.M, temporalMaxM × R_cur.M)
         R_prev.M = min(R_prev.M, uint(temporalMaxM * float(R_cur.M)));
 
+        // ▶ 병합 가중치 (Bitterli 2020, Eq.(6)):
+        //   두 reservoir를 합칠 때 R_b의 기여 가중치:
+        //     w_b = p̂_p(y_b) · R_b.W · R_b.M
+        //   여기서 p̂_p = 현재 픽셀 p 의 표면에서 y_b(이전 선택 광원)를 평가
+        //   (MergeReservoir 내부에서 UpdateReservoir 호출 시 w_b 계산)
+        //
         // TODO [Session 2]: 이전 프레임 선택 광원의 p_hat @ 현재 픽셀 계산
         float pHat_prev = 0.0f;
         if (R_prev.lightIdx != 0xFFFFFFFFu)
