@@ -135,17 +135,27 @@ void RayGen_Shade()
 
     float4 matInf   = gbuf_matInfo[idx];
     float3 hitPos   = wPos.xyz;
-    float3 N        = gbuf_normal[idx].xyz;
+    float4 normData = gbuf_normal[idx];
+    float3 N        = normData.xyz;
     float3 albedo   = gbuf_albedo[idx].rgb;
     float  metallic = gbuf_albedo[idx].a;
     float  roughness= matInf.r;
 
-    // ── 투명/반투명 픽셀: 패스 트레이싱 폴백 ─────────────────────
+    // ── 투명/반투명 픽셀: g_output 유지 (경로 추적 결과 보존) ────
+    // matInf.b < 0 은 유리/반투명 신호 (GBuffer.hlsl skipFlag=-1)
+    // ReSTIR DI는 불투명 표면만 처리 – 투명 픽셀은 건드리지 않음
     if (matInf.b < 0.0f)
+        return;
+
+    // ── 발광 픽셀: emission 직접 출력 ────────────────────────────
+    uint  matIdx  = uint(normData.w + 0.5f);
+    float emissive = matEmissive[matIdx];
+    if (emissive > 0.0f)
     {
-        // TODO [Session 3]: 기존 Raytracing.hlsl 방식으로 처리
-        // (유리/반투명은 ReSTIR와 별도 처리)
-        g_output[idx] = float4(albedo, 1.0f);  // STUB
+        float3 em = albedo * emissive;
+        float3 c  = em / (em + 1.0f);
+        c = pow(max(c, 0.0f), 1.0f / 2.2f);
+        g_output[idx] = float4(c, 1.0f);
         return;
     }
 
@@ -187,12 +197,24 @@ void RayGen_Shade()
             //                             float3 albedo, float metallic, float alpha2)
             //     → alpha2 = roughness^4  (Disney α = roughness², α² = roughness⁴)
             //
-            // TODO [Session 3]: 아래 STUB를 GGX PBR BRDF 평가로 교체
-            float3 V = normalize(camPos - hitPos);
-            float3 brdf = albedo / 3.14159f;  // STUB: Lambertian
+            // GGX Cook-Torrance BRDF (Bitterli 2020 Eq.5)
+            float3 V     = normalize(camPos - hitPos);
+            float  alpha  = max(roughness * roughness, 0.001f);
+            float  alpha2 = alpha * alpha;
+            float  NdotV  = max(dot(N, V), 0.0001f);
+            float3 H      = normalize(V + L);
+            float  NdotH  = max(dot(N, H), 0.0001f);
+            float  VdotH  = max(dot(V, H), 0.0001f);
+            float3 F0     = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+            float3 F      = SchlickF(VdotH, F0);
+            float  D      = D_GGX(NdotH, alpha2);
+            float  G      = G1_Smith(NdotV, alpha2) * G1_Smith(NdotL, alpha2);
+            float3 spec   = D * G * F / max(4.0f * NdotV * NdotL, 0.0001f);
+            float3 diff   = (1.0f - F) * (1.0f - metallic) * albedo * INV_PI;
+            float3 fr     = spec + diff;
 
             // ReSTIR 기여: f_r * Li * NdotL * vis * R.W
-            directLight = brdf * Li * NdotL * vis * R.W;
+            directLight = fr * Li * NdotL * vis * R.W;
         }
     }
 
