@@ -1,6 +1,7 @@
 #pragma once
 #include "Common.h"
 #include "DescriptorHeap.h"
+#include "ShaderTable.h"
 
 // ──────────────────────────────────────────────────────────────
 //  ReSTIRPass – G-Buffer / Reservoir 버퍼 + Compute/DXR 파이프라인 관리
@@ -75,8 +76,20 @@ public:
     void DispatchSpatial(ID3D12GraphicsCommandList* cmdList,
                          uint32_t width, uint32_t height);
 
+    // [Pass 5] Shade: DXR shadow ray + GGX BRDF 최종 출력
+    void DispatchShade(ID3D12GraphicsCommandList4* cmdList,
+                       ID3D12StateObject*          shadePSO,
+                       const ShaderTable&          shaderTable,
+                       uint32_t width, uint32_t height);
+
     // 프레임 마지막: cur ↔ prev 교환 (포인터 스왑, GPU 이동 없음)
     void SwapReservoirs();
+
+    // ReSTIRCB GPU 가상 주소 (App::OnRender에서 루트 CBV 바인딩용)
+    D3D12_GPU_VIRTUAL_ADDRESS RestirCBAddress() const noexcept
+    {
+        return m_restirCB ? m_restirCB->GetGPUVirtualAddress() : 0;
+    }
 
     // UAV 배리어 (패스 간 동기화)
     void UAVBarrier(ID3D12GraphicsCommandList* cmdList);
@@ -132,6 +145,26 @@ private:
 
     uint32_t m_width  = 0;
     uint32_t m_height = 0;
+
+    // ── 디바이스 (디스크립터 복사용) ──────────────────────────
+    ID3D12Device* m_device = nullptr;
+    uint32_t      m_descriptorIncrementSize = 0;
+
+    // ── 공간 ping-pong용 스테이징 핸들 (슬롯 22~25) ──────────
+    // CopyDescriptorsSimple 소스: same heap 내 non-shader 슬롯
+    D3D12_CPU_DESCRIPTOR_HANDLE m_stageResA_UAV{};
+    D3D12_CPU_DESCRIPTOR_HANDLE m_stageResB_UAV{};
+    D3D12_CPU_DESCRIPTOR_HANDLE m_stageResA_SRV{};
+    D3D12_CPU_DESCRIPTOR_HANDLE m_stageResB_SRV{};
+
+    // ── 메인 힙 슬롯 핸들 (스왑/ping-pong 갱신 대상) ──────────
+    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot11_cpu{};  // u6  UAV reservoir_cur
+    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot12_cpu{};  // u7  UAV reservoir_prev
+    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot20_cpu{};  // t11 SRV reservoir_in
+    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot21_cpu{};  // t12 SRV reservoir_cur(shade)
+
+    // G-Buffer 리소스 현재 상태 추적 (UAV ↔ NON_PIXEL_SHADER_RESOURCE)
+    bool m_gbufInSRVState = false;
 
     // ── 내부 헬퍼 ────────────────────────────────────────────
     void CreateBuffers(ID3D12Device* device, DescriptorHeap& heap,

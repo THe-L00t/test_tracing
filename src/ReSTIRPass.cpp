@@ -358,8 +358,26 @@ void ReSTIRPass::DispatchGBuffer(ID3D12GraphicsCommandList4* cmdList,
                                   const ShaderTable&          shaderTable,
                                   uint32_t w, uint32_t h)
 {
-    // G-Buffer UAV들은 이미 UNORDERED_ACCESS 상태 (CreateUAVTexture 초기상태)
-    // (이미 UAV 상태임을 가정; 최초 프레임에서는 barrier 불필요)
+    // G-Buffer 상태 전환: NON_PIXEL_SHADER_RESOURCE → UNORDERED_ACCESS
+    // (2번째 프레임부터 Compute 패스가 SRV로 읽은 뒤 UAV로 되돌림)
+    if (m_gbufInSRVState)
+    {
+        D3D12_RESOURCE_BARRIER barriers[4]{};
+        ID3D12Resource* gbuf[4] = {
+            m_gbWorldPos.Get(), m_gbNormal.Get(),
+            m_gbAlbedo.Get(),   m_gbMatInfo.Get()
+        };
+        for (int i = 0; i < 4; ++i)
+        {
+            barriers[i].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barriers[i].Transition.pResource   = gbuf[i];
+            barriers[i].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            barriers[i].Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        }
+        cmdList->ResourceBarrier(4, barriers);
+        m_gbufInSRVState = false;
+    }
 
     cmdList->SetPipelineState1(gbufferPSO);
 
@@ -373,7 +391,8 @@ void ReSTIRPass::DispatchGBuffer(ID3D12GraphicsCommandList4* cmdList,
 
     cmdList->DispatchRays(&desc);
 
-    // G-Buffer 쓰기 완료 대기 (UAV 배리어)
+    // G-Buffer 쓰기 완료 후: UNORDERED_ACCESS → NON_PIXEL_SHADER_RESOURCE
+    // (Compute 패스 Initial/Temporal/Spatial이 SRV t6~t9로 읽을 수 있게)
     {
         D3D12_RESOURCE_BARRIER barriers[4]{};
         ID3D12Resource* gbuf[4] = {
@@ -382,10 +401,14 @@ void ReSTIRPass::DispatchGBuffer(ID3D12GraphicsCommandList4* cmdList,
         };
         for (int i = 0; i < 4; ++i)
         {
-            barriers[i].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-            barriers[i].UAV.pResource = gbuf[i];
+            barriers[i].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barriers[i].Transition.pResource   = gbuf[i];
+            barriers[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            barriers[i].Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         }
         cmdList->ResourceBarrier(4, barriers);
+        m_gbufInSRVState = true;
     }
 }
 
@@ -530,20 +553,20 @@ void ReSTIRPass::SwapReservoirs()
 // ──────────────────────────────────────────────────────────────
 void ReSTIRPass::UAVBarrier(ID3D12GraphicsCommandList* cmdList)
 {
+    // G-Buffer는 transition barrier로 동기화하므로 제외
+    // Reservoir + motionVec만 UAV 배리어 (항상 UAV 상태)
     ID3D12Resource* resources[] = {
-        m_gbWorldPos.Get(), m_gbNormal.Get(),
-        m_gbAlbedo.Get(),   m_gbMatInfo.Get(),
         m_reservoirA.Get(), m_reservoirB.Get(),
         m_motionVec.Get()
     };
 
-    D3D12_RESOURCE_BARRIER barriers[7]{};
-    for (int i = 0; i < 7; ++i)
+    D3D12_RESOURCE_BARRIER barriers[3]{};
+    for (int i = 0; i < 3; ++i)
     {
         barriers[i].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
         barriers[i].UAV.pResource = resources[i];
     }
-    cmdList->ResourceBarrier(7, barriers);
+    cmdList->ResourceBarrier(3, barriers);
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -551,6 +574,26 @@ void ReSTIRPass::UAVBarrier(ID3D12GraphicsCommandList* cmdList)
 // ──────────────────────────────────────────────────────────────
 void ReSTIRPass::ClearGBuffer(ID3D12GraphicsCommandList* cmdList)
 {
+    // SRV 상태라면 UAV로 전환 (ClearUnorderedAccessViewFloat는 UAV 상태 필요)
+    if (m_gbufInSRVState)
+    {
+        D3D12_RESOURCE_BARRIER barriers[4]{};
+        ID3D12Resource* gbuf[4] = {
+            m_gbWorldPos.Get(), m_gbNormal.Get(),
+            m_gbAlbedo.Get(),   m_gbMatInfo.Get()
+        };
+        for (int i = 0; i < 4; ++i)
+        {
+            barriers[i].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barriers[i].Transition.pResource   = gbuf[i];
+            barriers[i].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            barriers[i].Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        }
+        cmdList->ResourceBarrier(4, barriers);
+        m_gbufInSRVState = false;
+    }
+
     // worldPos.w = -1 로 클리어하여 배경으로 마킹
     const float clearW[4] = { 0.0f, 0.0f, 0.0f, -1.0f };
     const float clearZ[4] = { 0.0f, 0.0f, 0.0f,  0.0f };
