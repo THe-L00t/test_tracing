@@ -418,6 +418,35 @@ void ReSTIRPass::DispatchGBuffer(ID3D12GraphicsCommandList4* cmdList,
 void ReSTIRPass::DispatchInitial(ID3D12GraphicsCommandList* cmdList,
                                   uint32_t w, uint32_t h)
 {
+    // 이전 프레임 Shade/Spatial이 reservoir를 SRV 상태로 전환했을 수 있음
+    // Initial/Temporal은 RWStructuredBuffer(UAV)로 읽으므로 UAV 상태 필요
+    {
+        D3D12_RESOURCE_BARRIER barriers[2]{};
+        int count = 0;
+        if (m_resAInSRVState)
+        {
+            barriers[count].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barriers[count].Transition.pResource   = m_reservoirA.Get();
+            barriers[count].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            barriers[count].Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            barriers[count].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            ++count;
+            m_resAInSRVState = false;
+        }
+        if (m_resBInSRVState)
+        {
+            barriers[count].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barriers[count].Transition.pResource   = m_reservoirB.Get();
+            barriers[count].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            barriers[count].Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            barriers[count].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            ++count;
+            m_resBInSRVState = false;
+        }
+        if (count > 0)
+            cmdList->ResourceBarrier(static_cast<UINT>(count), barriers);
+    }
+
     cmdList->SetPipelineState(m_psoInitial.Get());
 
     uint32_t gx = (w + 7u) / 8u;
@@ -468,58 +497,94 @@ void ReSTIRPass::DispatchSpatial(ID3D12GraphicsCommandList* cmdList,
     uint32_t gx = (w + 7u) / 8u;
     uint32_t gy = (h + 7u) / 8u;
 
-    // curIsA에 따라 cur/temp 버퍼 선택
+    // curIsA에 따라 cur/temp 버퍼 및 디스크립터 선택
     D3D12_CPU_DESCRIPTOR_HANDLE curUAV  = m_curIsA ? m_stageResA_UAV : m_stageResB_UAV;
     D3D12_CPU_DESCRIPTOR_HANDLE tempUAV = m_curIsA ? m_stageResB_UAV : m_stageResA_UAV;
     D3D12_CPU_DESCRIPTOR_HANDLE curSRV  = m_curIsA ? m_stageResA_SRV : m_stageResB_SRV;
     D3D12_CPU_DESCRIPTOR_HANDLE tempSRV = m_curIsA ? m_stageResB_SRV : m_stageResA_SRV;
     ID3D12Resource* curRes  = m_curIsA ? m_reservoirA.Get() : m_reservoirB.Get();
     ID3D12Resource* tempRes = m_curIsA ? m_reservoirB.Get() : m_reservoirA.Get();
+    bool& curInSRV  = m_curIsA ? m_resAInSRVState : m_resBInSRVState;
+    bool& tempInSRV = m_curIsA ? m_resBInSRVState : m_resAInSRVState;
 
-    // ── Pass 0: cur → temp ────────────────────────────────────
-    m_device->CopyDescriptorsSimple(1,
-        m_heapSlot11_cpu, tempUAV,
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    m_device->CopyDescriptorsSimple(1,
-        m_heapSlot20_cpu, curSRV,
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    // ── Pass 0: cur(SRV t11 읽기) → temp(UAV u6 쓰기) ──────────
+    // cur: UAV → NON_PIXEL_SHADER_RESOURCE (StructuredBuffer t11로 읽기 전)
+    {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource   = curRes;
+        b.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        b.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        cmdList->ResourceBarrier(1, &b);
+        curInSRV = true;
+    }
+
+    m_device->CopyDescriptorsSimple(1, m_heapSlot11_cpu, tempUAV,
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);  // u6 = temp UAV (쓰기)
+    m_device->CopyDescriptorsSimple(1, m_heapSlot20_cpu, curSRV,
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);  // t11 = cur SRV (읽기)
 
     cmdList->SetPipelineState(m_psoSpatial.Get());
     cmdList->Dispatch(gx, gy, 1);
 
+    // Pass 0 완료: temp(UAV→SRV), cur(SRV→UAV) 상태 전환
     {
-        D3D12_RESOURCE_BARRIER b{};
-        b.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        b.UAV.pResource = tempRes;
-        cmdList->ResourceBarrier(1, &b);
+        D3D12_RESOURCE_BARRIER barriers[2]{};
+        // temp: UAV → SRV (Pass 1에서 t11 읽기용)
+        barriers[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[0].Transition.pResource   = tempRes;
+        barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        barriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        // cur: SRV → UAV (Pass 1에서 u6 쓰기용)
+        barriers[1].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[1].Transition.pResource   = curRes;
+        barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        barriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        cmdList->ResourceBarrier(2, barriers);
+        tempInSRV = true;
+        curInSRV  = false;
     }
 
-    // ── Pass 1: temp → cur ────────────────────────────────────
-    m_device->CopyDescriptorsSimple(1,
-        m_heapSlot11_cpu, curUAV,
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    m_device->CopyDescriptorsSimple(1,
-        m_heapSlot20_cpu, tempSRV,
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    // ── Pass 1: temp(SRV t11 읽기) → cur(UAV u6 쓰기) ──────────
+    m_device->CopyDescriptorsSimple(1, m_heapSlot11_cpu, curUAV,
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);  // u6 = cur UAV (쓰기)
+    m_device->CopyDescriptorsSimple(1, m_heapSlot20_cpu, tempSRV,
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);  // t11 = temp SRV (읽기)
 
     cmdList->SetPipelineState(m_psoSpatial.Get());
     cmdList->Dispatch(gx, gy, 1);
 
+    // Pass 1 완료:
+    // - cur: UAV → SRV (Shade pass에서 t12로 읽기)
+    // - temp: SRV → UAV (다음 프레임 DispatchInitial이 확인하지만 미리 복원)
     {
-        D3D12_RESOURCE_BARRIER b{};
-        b.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        b.UAV.pResource = curRes;
-        cmdList->ResourceBarrier(1, &b);
+        D3D12_RESOURCE_BARRIER barriers[2]{};
+        // cur: UAV → SRV (최종 결과, Shade pass t12용)
+        barriers[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[0].Transition.pResource   = curRes;
+        barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        barriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        // temp: SRV → UAV (복원)
+        barriers[1].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[1].Transition.pResource   = tempRes;
+        barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        barriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        cmdList->ResourceBarrier(2, barriers);
+        curInSRV  = true;
+        tempInSRV = false;
     }
 
-    // ── 슬롯 21 = cur SRV (Shade pass가 t12로 읽을 최종 결과) ─
-    m_device->CopyDescriptorsSimple(1,
-        m_heapSlot21_cpu, curSRV,
+    // 슬롯 21(t12) = curSRV (Shade가 최종 결과를 읽음)
+    m_device->CopyDescriptorsSimple(1, m_heapSlot21_cpu, curSRV,
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    // 슬롯 11/20 을 cur 상태로 복원
-    m_device->CopyDescriptorsSimple(1,
-        m_heapSlot11_cpu, curUAV,
+    // 슬롯 11/20 을 cur 상태로 복원 (SwapReservoirs 이전 안전 상태)
+    m_device->CopyDescriptorsSimple(1, m_heapSlot11_cpu, curUAV,
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     m_device->CopyDescriptorsSimple(1,
         m_heapSlot20_cpu, curSRV,
@@ -553,20 +618,12 @@ void ReSTIRPass::SwapReservoirs()
 // ──────────────────────────────────────────────────────────────
 void ReSTIRPass::UAVBarrier(ID3D12GraphicsCommandList* cmdList)
 {
-    // G-Buffer는 transition barrier로 동기화하므로 제외
-    // Reservoir + motionVec만 UAV 배리어 (항상 UAV 상태)
-    ID3D12Resource* resources[] = {
-        m_reservoirA.Get(), m_reservoirB.Get(),
-        m_motionVec.Get()
-    };
-
-    D3D12_RESOURCE_BARRIER barriers[3]{};
-    for (int i = 0; i < 3; ++i)
-    {
-        barriers[i].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        barriers[i].UAV.pResource = resources[i];
-    }
-    cmdList->ResourceBarrier(3, barriers);
+    // G-Buffer와 Reservoir는 transition barrier로 동기화하므로 제외
+    // motionVec만 UAV 배리어 (항상 UAV 상태)
+    D3D12_RESOURCE_BARRIER b{};
+    b.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    b.UAV.pResource = m_motionVec.Get();
+    cmdList->ResourceBarrier(1, &b);
 }
 
 // ──────────────────────────────────────────────────────────────

@@ -163,8 +163,10 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot20_cpu{};  // t11 SRV reservoir_in
     D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot21_cpu{};  // t12 SRV reservoir_cur(shade)
 
-    // G-Buffer 리소스 현재 상태 추적 (UAV ↔ NON_PIXEL_SHADER_RESOURCE)
+    // 리소스 상태 추적 (UAV ↔ NON_PIXEL_SHADER_RESOURCE)
     bool m_gbufInSRVState = false;
+    bool m_resAInSRVState = false;  // reservoirA 현재 상태
+    bool m_resBInSRVState = false;  // reservoirB 현재 상태
 
     // ── 내부 헬퍼 ────────────────────────────────────────────
     void CreateBuffers(ID3D12Device* device, DescriptorHeap& heap,
