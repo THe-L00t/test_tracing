@@ -101,7 +101,7 @@ void CS_Spatial(uint3 tid : SV_DispatchThreadID)
     float  metallic_p= gbuf_albedo[px].a;
     float  roughness_p = matInf.r;
     float  depth_p   = matInf.g;
-    float3 V_p       = float3(0,1,0);  // STUB
+    float3 V_p       = normalize(camPos - hitPos_p);
 
     uint seed = (px.x * 1973u + px.y * 9277u + frameIndex * 26699u + 3571u) | 1u;
 
@@ -156,9 +156,12 @@ void CS_Spatial(uint3 tid : SV_DispatchThreadID)
         //   ※ CalcJacobian은 현재 STUB(return 1.0) → Session 2에서 구현
 
         LightData light_q = g_lightList[R_q.lightIdx];
-        // TODO [Session 2]: lightNormal은 area light 법선; point light라면 임의값 사용 가능
-        // (CalcJacobian 내부에서 point light 분기 처리 권장)
-        float Jacobian    = CalcJacobian(hitPos_p, wPos_q.xyz, light_q.pos, light_q.pos);  // STUB normal
+        // ▶ Jacobian lightNormal:
+        //   포인트 라이트(type==0): float3(0,0,0) → CalcJacobian이 point light 분기 진입
+        //     (lightNormal=lightPos를 넘기면 lenN>>1e-6 → 잘못된 area light 경로 → 극단적 J)
+        //   면 광원(type==2): light center를 방향 벡터로 사용 (근사)
+        float3 lightNormal = float3(0.0f, 0.0f, 0.0f);  // point light: cosine 항 상쇄
+        float Jacobian    = CalcJacobian(hitPos_p, wPos_q.xyz, light_q.pos, lightNormal);
         float pHat_q      = EvalTargetPDF(hitPos_p, N_p, V_p, albedo_p, metallic_p, roughness_p, light_q);
         pHat_q *= Jacobian;
 
@@ -176,9 +179,4 @@ void CS_Spatial(uint3 tid : SV_DispatchThreadID)
     reservoir_out[pidx] = R_out;
 }
 
-uint WangHash(uint s)
-{
-    s = (s ^ 61u) ^ (s >> 16u); s *= 9u;
-    s ^= s >> 4u; s *= 0x27d4eb2du; s ^= s >> 15u;
-    return s;
-}
+// WangHash는 Common_ReSTIR.hlsli에 정의됨
