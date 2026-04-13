@@ -100,6 +100,7 @@
     <ClCompile Include="src\RenderTarget.cpp" />
     <ClCompile Include="src\TextOverlay.cpp" />
     <ClCompile Include="src\Denoiser.cpp" />
+    <ClCompile Include="src\ReSTIRPass.cpp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -114,11 +115,18 @@
     <ClInclude Include="src\Common.h" />
     <ClInclude Include="src\TextOverlay.h" />
     <ClInclude Include="src\Denoiser.h" />
+    <ClInclude Include="src\ReSTIRPass.h" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="shaders\Raytracing.hlsl" />
     <None Include="shaders\Denoise.hlsl" />
+    <None Include="shaders\GBuffer.hlsl" />
+    <None Include="shaders\ReSTIR_Initial.hlsl" />
+    <None Include="shaders\ReSTIR_Temporal.hlsl" />
+    <None Include="shaders\ReSTIR_Spatial.hlsl" />
+    <None Include="shaders\ReSTIR_Shade.hlsl" />
+    <None Include="shaders\Common_ReSTIR.hlsli" />
   </ItemGroup>
 
   <!-- dxcompiler.dll / dxil.dll: DXR 런타임 셰이더 컴파일에 필요 -->
