@@ -1,8 +1,10 @@
 #include "App.h"
+#include <dxcapi.h>
 #include <print>
 #include <cstring>
 #include <cmath>
 #include <vector>
+#include <filesystem>
 
 // ---------------------------------------------------------------
 // 구 메시 생성 (UV 구, 삼각형 리스트, 단위 구 반지름 1)
@@ -296,9 +298,29 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
     // 디노이저 초기화
     m_denoiser.Init(m_core.Device(), width, height);
 
+    // ReSTIR 초기화
+    m_restir.Init(m_core.Device(), m_core.CbvSrvUavHeap(),
+                  m_globalRS.Get(), width, height);
+
+    // GBuffer / Shade DXR PSO 빌드
+    BuildGBufferPSO();
+    BuildShadePSO();
+
+    // 초기 씬(0) 광원 업로드
+    {
+        ThrowIfFailed(m_core.CmdAlloc(0)->Reset());
+        ThrowIfFailed(m_core.CmdList()->Reset(m_core.CmdAlloc(0), nullptr));
+        auto lights = BuildLightList(m_sceneID);
+        m_restir.UploadLights(m_core.CmdList(), lights);
+        m_restir.UpdateCB(ReSTIRCB{});  // 기본값으로 초기화
+        m_core.SubmitAndFlush();
+    }
+
+    m_prevCamera = m_camera;  // 이전 프레임 카메라 초기화
+
     m_sceneBuilt = true;
     std::println("[App] 초기화 완료 - 씬 0 (야외)");
-    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, D 디노이저 토글, ESC 종료");
+    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, D 디노이저 토글, R ReSTIR 토글, ESC 종료");
 }
 
 void App::Shutdown()
@@ -510,6 +532,17 @@ void App::SwitchScene(uint32_t id)
 
     // TLAS SRV 갱신
     RebuildTLASSRV();
+
+    // ReSTIR: G-Buffer 클리어 + 광원 리스트 갱신
+    {
+        ThrowIfFailed(m_core.CmdAlloc(0)->Reset());
+        ThrowIfFailed(m_core.CmdList()->Reset(m_core.CmdAlloc(0), nullptr));
+        m_restir.ClearGBuffer(m_core.CmdList());
+        auto lights = BuildLightList(m_sceneID);
+        m_restir.UploadLights(m_core.CmdList(), lights);
+        m_core.SubmitAndFlush();
+    }
+    m_prevCamera = m_camera;  // 씬 전환 시 이전 카메라 리셋
 }
 
 // ---------------------------------------------------------------
@@ -733,14 +766,22 @@ void App::OnKeyDown(uint32_t key)
     if (key == '1') SwitchScene(0);
     else if (key == '2') SwitchScene(1);
     else if (key == '3') SwitchScene(2);
-    else if (key == 'R')
+    else if (key == 'D')
     {
         m_denoiseEnabled        = !m_denoiseEnabled;
         m_denoiser.enabled      = m_denoiseEnabled;
-        m_frameCount            = 0;  // 누적 초기화 (노이즈 기준이 달라지므로)
+        m_frameCount            = 0;
         m_cameraMoved           = true;
-        m_accumDirty            = true;  // 디노이저 상태 변화 → 누적 버퍼 클리어 필요
+        m_accumDirty            = true;
         std::println("[App] 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
+    }
+    else if (key == 'R')
+    {
+        m_restirEnabled = !m_restirEnabled;
+        m_frameCount    = 0;
+        m_cameraMoved   = true;
+        m_accumDirty    = true;
+        std::println("[App] ReSTIR {}", m_restirEnabled ? "ON" : "OFF");
     }
 }
 
@@ -796,35 +837,66 @@ void App::OnRender()
 
     cmd->SetComputeRootSignature(m_globalRS.Get());
 
-    // 파라미터 0: 디스크립터 테이블 (힙 슬롯 0부터 - UAV + SRVs)
+    // 파라미터 0: 디스크립터 테이블 (힙 슬롯 0부터)
     cmd->SetComputeRootDescriptorTable(0, m_core.CbvSrvUavHeap().GetHandle(0).gpu);
 
-    // 파라미터 1: 인라인 루트 CBV (씬 상수 버퍼)
+    // 파라미터 1: SceneCB
     cmd->SetComputeRootConstantBufferView(1, m_sceneCB->GetGPUVirtualAddress());
 
-    // RTPSO 설정 및 레이 디스패치
-    cmd->SetPipelineState1(m_pipeline.PSO());
-
-    const auto& st = m_pipeline.GetShaderTable();
-    D3D12_DISPATCH_RAYS_DESC dispatchDesc{};
-    dispatchDesc.RayGenerationShaderRecord = st.RayGenRange();
-    dispatchDesc.MissShaderTable           = st.MissRange();
-    dispatchDesc.HitGroupTable             = st.HitGroupRange();
-    dispatchDesc.Width                     = m_width;
-    dispatchDesc.Height                    = m_height;
-    dispatchDesc.Depth                     = 1;
-
-    cmd->DispatchRays(&dispatchDesc);
-
-    // UAV 쓰기 완료 보장 (g_output + g_accumulation 모두 배리어)
-    m_renderTarget.UAVBarriers(cmd);
-
-    // 디노이저가 활성화된 경우: g_accumulation → (A-trous 3패스) → g_output 덮어쓰기
-    if (m_denoiseEnabled)
+    if (m_restirEnabled)
     {
-        m_denoiser.Apply(cmd,
-                         m_renderTarget.AccumResource(),
-                         m_renderTarget.Resource());
+        // ── ReSTIR 5 패스 ───────────────────────────────────
+        UpdateReSTIRCB();
+        cmd->SetComputeRootConstantBufferView(2, m_restir.RestirCBAddress());
+
+        // Pass 1: G-Buffer
+        m_restir.DispatchGBuffer(cmd, m_gbufferPSO.Get(),
+                                 m_gbufferShaderTable, m_width, m_height);
+
+        // Pass 2: Initial (RIS 후보 생성)
+        m_restir.DispatchInitial(cmd, m_width, m_height);
+
+        // Pass 3: Temporal (이전 프레임 재사용)
+        m_restir.DispatchTemporal(cmd, m_width, m_height);
+
+        // Pass 4: Spatial (이웃 픽셀 재사용 x2)
+        m_restir.DispatchSpatial(cmd, m_width, m_height);
+
+        // Pass 5: Shade (그림자 레이 + GGX BRDF → g_output)
+        m_restir.DispatchShade(cmd, m_shadePSO.Get(),
+                               m_shadeShaderTable, m_width, m_height);
+
+        m_renderTarget.UAVBarriers(cmd);
+
+        // 다음 프레임을 위해 이전 카메라 저장 및 Reservoir 교환
+        m_prevCamera = m_camera;
+        m_restir.SwapReservoirs();
+    }
+    else
+    {
+        // ── 기존 클래식 Path Tracing ─────────────────────────
+        cmd->SetPipelineState1(m_pipeline.PSO());
+
+        const auto& st = m_pipeline.GetShaderTable();
+        D3D12_DISPATCH_RAYS_DESC dispatchDesc{};
+        dispatchDesc.RayGenerationShaderRecord = st.RayGenRange();
+        dispatchDesc.MissShaderTable           = st.MissRange();
+        dispatchDesc.HitGroupTable             = st.HitGroupRange();
+        dispatchDesc.Width                     = m_width;
+        dispatchDesc.Height                    = m_height;
+        dispatchDesc.Depth                     = 1;
+
+        cmd->DispatchRays(&dispatchDesc);
+
+        m_renderTarget.UAVBarriers(cmd);
+
+        // 디노이저가 활성화된 경우
+        if (m_denoiseEnabled)
+        {
+            m_denoiser.Apply(cmd,
+                             m_renderTarget.AccumResource(),
+                             m_renderTarget.Resource());
+        }
     }
 
     // 결과를 백버퍼로 복사 후 Present
@@ -839,4 +911,252 @@ void App::OnResize(uint32_t width, uint32_t height)
     m_width  = width;
     m_height = height;
     std::println("[App] 리사이즈: {}x{}", width, height);
+}
+
+// ---------------------------------------------------------------
+//  DXR PSO 빌더 헬퍼 (DXC lib_6_3 컴파일 → StateObject 생성)
+// ---------------------------------------------------------------
+namespace
+{
+    // DXC lib_6_3 컴파일 (DXRPipeline.cpp의 CompileShaderDXC와 동일 패턴)
+    ComPtr<IDxcBlob> CompileDXRLib(const std::filesystem::path& path)
+    {
+        ComPtr<IDxcUtils>    utils;
+        ComPtr<IDxcCompiler3> compiler;
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcUtils,    IID_PPV_ARGS(&utils)));
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler)));
+
+        ComPtr<IDxcBlobEncoding> src;
+        ThrowIfFailed(utils->LoadFile(path.c_str(), nullptr, &src));
+        DxcBuffer buf{ src->GetBufferPointer(), src->GetBufferSize(), DXC_CP_UTF8 };
+
+        std::wstring fname      = path.wstring();
+        std::wstring includeDir = path.parent_path().wstring();
+        std::vector<LPCWSTR> args = {
+            fname.c_str(), L"-T", L"lib_6_3", L"-HV", L"2021",
+            L"-I", includeDir.c_str(),
+#if defined(_DEBUG)
+            L"-Zi", L"-Od",
+#else
+            L"-O3",
+#endif
+        };
+
+        ComPtr<IDxcIncludeHandler> includeHandler;
+        ThrowIfFailed(utils->CreateDefaultIncludeHandler(&includeHandler));
+
+        ComPtr<IDxcResult> result;
+        ThrowIfFailed(compiler->Compile(&buf, args.data(),
+            static_cast<UINT32>(args.size()), includeHandler.Get(), IID_PPV_ARGS(&result)));
+
+        HRESULT hr = S_OK;
+        result->GetStatus(&hr);
+        if (FAILED(hr))
+        {
+            ComPtr<IDxcBlobUtf8> err;
+            result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&err), nullptr);
+            if (err && err->GetStringLength() > 0)
+                std::println("[DXC] {}", err->GetStringPointer());
+            ThrowIfFailed(hr, path.string());
+        }
+        ComPtr<IDxcBlob> dxil;
+        result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&dxil), nullptr);
+        return dxil;
+    }
+}
+
+// ---------------------------------------------------------------
+//  GBuffer PSO 빌드
+//  셰이더: RayGen_GB, Miss_GB, ClosestHit_GB (GBuffer.hlsl)
+//  페이로드: GBPayload = float3+float+float3+float = 32 bytes
+// ---------------------------------------------------------------
+void App::BuildGBufferPSO()
+{
+    auto dxil = CompileDXRLib(L"shaders/GBuffer.hlsl");
+
+    D3D12_EXPORT_DESC exports[] = {
+        { L"RayGen_GB",     nullptr, D3D12_EXPORT_FLAG_NONE },
+        { L"Miss_GB",       nullptr, D3D12_EXPORT_FLAG_NONE },
+        { L"ClosestHit_GB", nullptr, D3D12_EXPORT_FLAG_NONE },
+    };
+    D3D12_DXIL_LIBRARY_DESC lib{};
+    lib.DXILLibrary = { dxil->GetBufferPointer(), dxil->GetBufferSize() };
+    lib.NumExports  = static_cast<UINT>(std::size(exports));
+    lib.pExports    = exports;
+
+    D3D12_HIT_GROUP_DESC hg{};
+    hg.HitGroupExport         = L"HitGroup_GB";
+    hg.Type                   = D3D12_HIT_GROUP_TYPE_TRIANGLES;
+    hg.ClosestHitShaderImport = L"ClosestHit_GB";
+
+    D3D12_RAYTRACING_SHADER_CONFIG sc{};
+    sc.MaxPayloadSizeInBytes   = 32;   // GBPayload: float3+float+float3+float
+    sc.MaxAttributeSizeInBytes = 8;    // barycentrics
+
+    D3D12_RAYTRACING_PIPELINE_CONFIG pc{};
+    pc.MaxTraceRecursionDepth = 1;     // GBuffer: 기본 레이만, 그림자 없음
+
+    D3D12_GLOBAL_ROOT_SIGNATURE grs{};
+    grs.pGlobalRootSignature = m_globalRS.Get();
+
+    D3D12_STATE_SUBOBJECT subs[5]{};
+    subs[0] = { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,               &lib };
+    subs[1] = { D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,                  &hg  };
+    subs[2] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,   &sc  };
+    subs[3] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pc  };
+    subs[4] = { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,      &grs };
+
+    D3D12_STATE_OBJECT_DESC soDesc{};
+    soDesc.Type          = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
+    soDesc.NumSubobjects = static_cast<UINT>(std::size(subs));
+    soDesc.pSubobjects   = subs;
+
+    ThrowIfFailed(m_core.Device()->CreateStateObject(&soDesc, IID_PPV_ARGS(&m_gbufferPSO)));
+    ThrowIfFailed(m_gbufferPSO.As(&m_gbufferPSOProps));
+
+    ShaderTable::Desc stDesc{};
+    stDesc.rayGenID   = m_gbufferPSOProps->GetShaderIdentifier(L"RayGen_GB");
+    stDesc.missID     = m_gbufferPSOProps->GetShaderIdentifier(L"Miss_GB");
+    stDesc.missID2    = nullptr;   // GBuffer에 그림자 레이 없음
+    stDesc.hitGroupID = m_gbufferPSOProps->GetShaderIdentifier(L"HitGroup_GB");
+    m_gbufferShaderTable.Build(m_core.Device(), stDesc);
+
+    std::println("[App] GBuffer PSO 완료");
+}
+
+// ---------------------------------------------------------------
+//  Shade PSO 빌드
+//  셰이더: RayGen_Shade, MissShadow_Shade (ReSTIR_Shade.hlsl)
+//  페이로드: ShadowPayload = float = 4 bytes
+//  그림자 레이: MissShader index 1, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER
+// ---------------------------------------------------------------
+void App::BuildShadePSO()
+{
+    auto dxil = CompileDXRLib(L"shaders/ReSTIR_Shade.hlsl");
+
+    D3D12_EXPORT_DESC exports[] = {
+        { L"RayGen_Shade",     nullptr, D3D12_EXPORT_FLAG_NONE },
+        { L"MissShadow_Shade", nullptr, D3D12_EXPORT_FLAG_NONE },
+    };
+    D3D12_DXIL_LIBRARY_DESC lib{};
+    lib.DXILLibrary = { dxil->GetBufferPointer(), dxil->GetBufferSize() };
+    lib.NumExports  = static_cast<UINT>(std::size(exports));
+    lib.pExports    = exports;
+
+    // 그림자 레이는 RAY_FLAG_SKIP_CLOSEST_HIT_SHADER 이므로 HitGroup 불필요
+    // 하지만 DispatchRays API에 HitGroup 테이블이 요구됨 → 빈 레코드로 처리
+    D3D12_RAYTRACING_SHADER_CONFIG sc{};
+    sc.MaxPayloadSizeInBytes   = 4;    // ShadowPayload: float vis
+    sc.MaxAttributeSizeInBytes = 8;
+
+    D3D12_RAYTRACING_PIPELINE_CONFIG pc{};
+    pc.MaxTraceRecursionDepth = 1;     // shadow ray 1회
+
+    D3D12_GLOBAL_ROOT_SIGNATURE grs{};
+    grs.pGlobalRootSignature = m_globalRS.Get();
+
+    D3D12_STATE_SUBOBJECT subs[4]{};
+    subs[0] = { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,               &lib };
+    subs[1] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,   &sc  };
+    subs[2] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pc  };
+    subs[3] = { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,      &grs };
+
+    D3D12_STATE_OBJECT_DESC soDesc{};
+    soDesc.Type          = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
+    soDesc.NumSubobjects = static_cast<UINT>(std::size(subs));
+    soDesc.pSubobjects   = subs;
+
+    ThrowIfFailed(m_core.Device()->CreateStateObject(&soDesc, IID_PPV_ARGS(&m_shadePSO)));
+    ThrowIfFailed(m_shadePSO.As(&m_shadePSOProps));
+
+    ShaderTable::Desc stDesc{};
+    stDesc.rayGenID   = m_shadePSOProps->GetShaderIdentifier(L"RayGen_Shade");
+    stDesc.missID     = nullptr;   // Miss[0] 미사용 (그림자 레이는 Miss[1] 사용)
+    stDesc.missID2    = m_shadePSOProps->GetShaderIdentifier(L"MissShadow_Shade");
+    stDesc.hitGroupID = nullptr;   // 그림자 레이는 closest hit 호출 안 함
+    m_shadeShaderTable.Build(m_core.Device(), stDesc);
+
+    std::println("[App] Shade PSO 완료");
+}
+
+// ---------------------------------------------------------------
+//  씬별 광원 리스트 생성
+// ---------------------------------------------------------------
+std::vector<LightData> App::BuildLightList(uint32_t sceneID) const
+{
+    std::vector<LightData> lights;
+    LightData ld{};
+
+    if (sceneID == 0)
+    {
+        // 씬 0 (야외): 태양 방향광
+        float sx = 1.0f, sy = 2.0f, sz = -0.5f;
+        float slen = sqrtf(sx*sx + sy*sy + sz*sz);
+        ld.pos[0] = sx/slen; ld.pos[1] = sy/slen; ld.pos[2] = sz/slen;
+        ld.intensity = 3.0f;
+        ld.color[0] = 1.0f; ld.color[1] = 1.0f; ld.color[2] = 1.0f;
+        ld.type = 1u;  // directional
+        lights.push_back(ld);
+    }
+    else if (sceneID == 1)
+    {
+        // 씬 1 (실내): 포인트 라이트
+        ld.pos[0] = 0.0f; ld.pos[1] = 3.8f; ld.pos[2] = 0.0f;
+        ld.intensity = 8.0f;
+        ld.color[0] = 1.0f; ld.color[1] = 1.0f; ld.color[2] = 1.0f;
+        ld.type = 0u;  // point
+        lights.push_back(ld);
+    }
+    else
+    {
+        // 씬 2 (구 쇼케이스): 포인트 라이트 2개
+        ld.pos[0] = -1.5f; ld.pos[1] = 3.6f; ld.pos[2] = 0.0f;
+        ld.intensity = 7.0f;
+        ld.color[0] = 1.0f; ld.color[1] = 1.0f; ld.color[2] = 1.0f;
+        ld.type = 0u;
+        lights.push_back(ld);
+
+        LightData ld2{};
+        ld2.pos[0] = 1.5f; ld2.pos[1] = 3.6f; ld2.pos[2] = -1.5f;
+        ld2.intensity = 5.5f;
+        ld2.color[0] = 1.0f; ld2.color[1] = 1.0f; ld2.color[2] = 1.0f;
+        ld2.type = 0u;
+        lights.push_back(ld2);
+    }
+
+    return lights;
+}
+
+// ---------------------------------------------------------------
+//  ReSTIRCB 업데이트 (매 프레임 OnRender에서 호출)
+// ---------------------------------------------------------------
+void App::UpdateReSTIRCB()
+{
+    ReSTIRCB cb{};
+
+    // 이전 프레임 카메라
+    const float* pp = m_prevCamera.Pos();
+    const float* pr = m_prevCamera.Right();
+    const float* pu = m_prevCamera.Up();
+    const float* pf = m_prevCamera.Forward();
+
+    cb.prevCamPos[0]  = pp[0]; cb.prevCamPos[1]  = pp[1]; cb.prevCamPos[2]  = pp[2];
+    cb.prevCamRight[0]= pr[0]; cb.prevCamRight[1]= pr[1]; cb.prevCamRight[2]= pr[2];
+    cb.prevCamUp[0]   = pu[0]; cb.prevCamUp[1]   = pu[1]; cb.prevCamUp[2]   = pu[2];
+    cb.prevCamForward[0]=pf[0]; cb.prevCamForward[1]=pf[1]; cb.prevCamForward[2]=pf[2];
+    cb.prevTanHalfFovY = 0.57735f;
+    cb.prevAspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
+
+    // ReSTIR 파라미터
+    auto lights = BuildLightList(m_sceneID);
+    cb.lightCount      = static_cast<uint32_t>(lights.size());
+    cb.candidateCount  = 32u;           // RIS 후보 수 (논문 권장)
+    cb.screenW         = m_width;
+    cb.screenH         = m_height;
+    cb.frameIndex      = m_frameCount;
+    cb.temporalMaxM    = 30.0f;         // 고스팅 방지 M 클램프
+    cb.spatialRadius   = 30u;           // 공간 재사용 반경 (픽셀)
+    cb.spatialSamples  = 5u;            // 공간 이웃 샘플 수
+
+    m_restir.UpdateCB(cb);
 }
