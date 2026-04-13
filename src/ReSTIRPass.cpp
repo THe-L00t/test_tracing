@@ -259,7 +259,7 @@ void ReSTIRPass::CreateBuffers(ID3D12Device* device,
     m_heapSlot11_cpu = m_reservoirA_UAV.cpu;
     m_heapSlot12_cpu = m_reservoirB_UAV.cpu;
     m_heapSlot20_cpu = m_reservoirA_SRV.cpu;
-    m_heapSlot21_cpu = m_reservoirA_SRV.cpu;
+    m_heapSlot21_cpu = m_reservoirB_SRV.cpu;  // 슬롯 21 = B_SRV (A_SRV는 슬롯 20)
 
     // 슬롯 21 (t12 shade)을 초기에는 A SRV로 덮어쓰기
     device->CopyDescriptorsSimple(1,
@@ -435,9 +435,9 @@ void ReSTIRPass::DispatchTemporal(ID3D12GraphicsCommandList* cmdList,
 
 // ──────────────────────────────────────────────────────────────
 //  DispatchSpatial  – [Pass 4] 공간 재사용 (ping-pong 2회)
-//  Pass 0: cur(A) SRV → B UAV
-//  Pass 1: B SRV → A UAV  (결과: A)
-//  이후 슬롯 21(t12 shade)을 A SRV로 복원
+//  Pass 0: cur SRV → temp UAV
+//  Pass 1: temp SRV → cur UAV  (최종 결과: cur)
+//  이후 슬롯 21(t12 shade)을 cur SRV로 설정
 // ──────────────────────────────────────────────────────────────
 void ReSTIRPass::DispatchSpatial(ID3D12GraphicsCommandList* cmdList,
                                   uint32_t w, uint32_t h)
@@ -445,32 +445,20 @@ void ReSTIRPass::DispatchSpatial(ID3D12GraphicsCommandList* cmdList,
     uint32_t gx = (w + 7u) / 8u;
     uint32_t gy = (h + 7u) / 8u;
 
-    // ── Pass 0: A → B ─────────────────────────────────────────
-    // 슬롯 11 = B UAV (write), 슬롯 20 = A SRV (read)
+    // curIsA에 따라 cur/temp 버퍼 선택
+    D3D12_CPU_DESCRIPTOR_HANDLE curUAV  = m_curIsA ? m_stageResA_UAV : m_stageResB_UAV;
+    D3D12_CPU_DESCRIPTOR_HANDLE tempUAV = m_curIsA ? m_stageResB_UAV : m_stageResA_UAV;
+    D3D12_CPU_DESCRIPTOR_HANDLE curSRV  = m_curIsA ? m_stageResA_SRV : m_stageResB_SRV;
+    D3D12_CPU_DESCRIPTOR_HANDLE tempSRV = m_curIsA ? m_stageResB_SRV : m_stageResA_SRV;
+    ID3D12Resource* curRes  = m_curIsA ? m_reservoirA.Get() : m_reservoirB.Get();
+    ID3D12Resource* tempRes = m_curIsA ? m_reservoirB.Get() : m_reservoirA.Get();
+
+    // ── Pass 0: cur → temp ────────────────────────────────────
     m_device->CopyDescriptorsSimple(1,
-        m_heapSlot11_cpu, m_stageResB_UAV,
+        m_heapSlot11_cpu, tempUAV,
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     m_device->CopyDescriptorsSimple(1,
-        m_heapSlot20_cpu, m_stageResA_SRV,
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-    cmdList->SetPipelineState(m_psoSpatial.Get());
-    cmdList->Dispatch(gx, gy, 1);
-
-    {
-        D3D12_RESOURCE_BARRIER b{};
-        b.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        b.UAV.pResource = m_reservoirB.Get();
-        cmdList->ResourceBarrier(1, &b);
-    }
-
-    // ── Pass 1: B → A ─────────────────────────────────────────
-    // 슬롯 11 = A UAV (write), 슬롯 20 = B SRV (read)
-    m_device->CopyDescriptorsSimple(1,
-        m_heapSlot11_cpu, m_stageResA_UAV,
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    m_device->CopyDescriptorsSimple(1,
-        m_heapSlot20_cpu, m_stageResB_SRV,
+        m_heapSlot20_cpu, curSRV,
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     cmdList->SetPipelineState(m_psoSpatial.Get());
@@ -479,21 +467,39 @@ void ReSTIRPass::DispatchSpatial(ID3D12GraphicsCommandList* cmdList,
     {
         D3D12_RESOURCE_BARRIER b{};
         b.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        b.UAV.pResource = m_reservoirA.Get();
+        b.UAV.pResource = tempRes;
         cmdList->ResourceBarrier(1, &b);
     }
 
-    // ── 슬롯 복원: 최종 결과(A)를 Shade pass(t12)용 SRV로 설정 ──
+    // ── Pass 1: temp → cur ────────────────────────────────────
     m_device->CopyDescriptorsSimple(1,
-        m_heapSlot21_cpu, m_stageResA_SRV,
+        m_heapSlot11_cpu, curUAV,
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    m_device->CopyDescriptorsSimple(1,
+        m_heapSlot20_cpu, tempSRV,
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    // 슬롯 11/20 을 cur/prev 기본 상태로 복원 (curIsA=true → A)
+    cmdList->SetPipelineState(m_psoSpatial.Get());
+    cmdList->Dispatch(gx, gy, 1);
+
+    {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        b.UAV.pResource = curRes;
+        cmdList->ResourceBarrier(1, &b);
+    }
+
+    // ── 슬롯 21 = cur SRV (Shade pass가 t12로 읽을 최종 결과) ─
     m_device->CopyDescriptorsSimple(1,
-        m_heapSlot11_cpu, m_stageResA_UAV,
+        m_heapSlot21_cpu, curSRV,
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    // 슬롯 11/20 을 cur 상태로 복원
+    m_device->CopyDescriptorsSimple(1,
+        m_heapSlot11_cpu, curUAV,
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     m_device->CopyDescriptorsSimple(1,
-        m_heapSlot20_cpu, m_stageResA_SRV,
+        m_heapSlot20_cpu, curSRV,
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 }
 

@@ -320,7 +320,7 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
 
     m_sceneBuilt = true;
     std::println("[App] 초기화 완료 - 씬 0 (야외)");
-    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, D 디노이저 토글, R ReSTIR 토글, ESC 종료");
+    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, F 디노이저 토글, R ReSTIR 토글, ESC 종료");
 }
 
 void App::Shutdown()
@@ -766,7 +766,7 @@ void App::OnKeyDown(uint32_t key)
     if (key == '1') SwitchScene(0);
     else if (key == '2') SwitchScene(1);
     else if (key == '3') SwitchScene(2);
-    else if (key == 'D')
+    else if (key == 'F')
     {
         m_denoiseEnabled        = !m_denoiseEnabled;
         m_denoiser.enabled      = m_denoiseEnabled;
