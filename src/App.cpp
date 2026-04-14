@@ -1058,15 +1058,16 @@ void App::BuildShadePSO()
     hitGroup.Type                   = D3D12_HIT_GROUP_TYPE_TRIANGLES;
     hitGroup.ClosestHitShaderImport = L"ClosestHit_Shade";
 
-    // IndirectPayload: float3(12) + uint(4) = 16 bytes > ShadowPayload(4)
+    // IndirectPayload: float3×4(48) + float(4) + uint×2(8) = 60 bytes
+    // MaxPayloadSizeInBytes = 64 (ShadowPayload 4 포함하여 최대값)
     D3D12_RAYTRACING_SHADER_CONFIG sc{};
-    sc.MaxPayloadSizeInBytes   = 16;
+    sc.MaxPayloadSizeInBytes   = 64;
     sc.MaxAttributeSizeInBytes = 8;
 
-    // RayGen → TraceRay(indirect|shadow): 깊이 1
-    // ClosestHit_Shade는 추가 TraceRay 없음 → 깊이 1로 충분
+    // Depth 2: RayGen(0) → ClosestHit_Shade(1) → ShadowVis(2)
+    // ClosestHit_Shade 내부에서 NEE shadow ray를 발사하므로 depth=2 필요
     D3D12_RAYTRACING_PIPELINE_CONFIG pc{};
-    pc.MaxTraceRecursionDepth = 1;
+    pc.MaxTraceRecursionDepth = 2;
 
     D3D12_GLOBAL_ROOT_SIGNATURE grs{};
     grs.pGlobalRootSignature = m_globalRS.Get();
