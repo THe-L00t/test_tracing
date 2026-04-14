@@ -417,19 +417,18 @@ void RayGen_Shade()
     // ── Firefly 억제: 간접광 휘도 상한 클램핑 ────────────────────
     // 1spp 경로에서 가끔 발생하는 극단적 스파이크(firefly) 제거
     float indLum = dot(indirectLight, float3(0.2126f, 0.7152f, 0.0722f));
-    if (indLum > 5.0f)
-        indirectLight *= 5.0f / indLum;
+    if (indLum > 2.5f)
+        indirectLight *= 2.5f / indLum;
 
     // ── 시간적 누적 → Reinhard 톤매핑 → gamma 보정 ───────────────
-    // frameCount=0: 카메라 이동·씬 전환 시 리셋 → 누적 초기화
-    // frameCount=N: 1/(N+1) 지수 이동 평균 → 수렴하면서 번쩍임 소멸
+    // randomSeed = App::m_shadeAccumCount
+    //   0 : 씬 전환 직후 (g_accumulation 클리어됨) → 전체 교체
+    //   N : 카메라 이동 포함 누적 N 프레임 → 부드러운 블렌딩
+    //   최대 32프레임 캡 → 카메라 정지 후 32프레임 내 재수렴 보장
     float3 total = directLight + indirectLight;
-    float3 accumulated;
-    if (frameCount == 0u)
-        accumulated = total;
-    else
-        accumulated = lerp(g_accumulation[idx].rgb, total,
-                           1.0f / float(frameCount + 1u));
+    uint   ac    = min(randomSeed, 32u);
+    float  alpha = (randomSeed == 0u) ? 1.0f : (1.0f / float(ac + 1u));
+    float3 accumulated = lerp(g_accumulation[idx].rgb, total, alpha);
     g_accumulation[idx] = float4(accumulated, 1.0f);
 
     float3 color = accumulated / (accumulated + 1.0f);

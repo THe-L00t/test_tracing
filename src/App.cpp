@@ -746,9 +746,11 @@ void App::UpdateSceneCB()
         cb.emissBoxHalfSize = 0.0f; // 발광 박스 없음
     }
 
-    // 패스 트레이싱 누적 파라미터
+    // 누적 파라미터
     cb.frameCount  = m_frameCount;
-    cb.randomSeed  = m_frameCount;  // 프레임마다 달라지는 시드
+    // ReSTIR 모드: randomSeed = m_shadeAccumCount (씬 전환 시만 리셋, 카메라 이동 무관)
+    // Path Tracer:  randomSeed = m_frameCount (카메라 이동 시 리셋, 기존 동작 유지)
+    cb.randomSeed  = m_restirEnabled ? m_shadeAccumCount : m_frameCount;
 
     // 업로드 버퍼에 직접 기록
     void* mapped = nullptr;
@@ -817,6 +819,14 @@ void App::OnRender()
     {
         m_frameCount++;
     }
+
+    // ReSTIR_Shade 전용 누적 카운터:
+    //   m_accumDirty(씬 전환) 시만 리셋, 카메라 이동과 무관
+    //   → 이동 중에도 이전 누적 유지하여 번쩍임 방지
+    if (m_accumDirty)
+        m_shadeAccumCount = 0;
+    else
+        m_shadeAccumCount++;
 
     UpdateSceneCB();
 
