@@ -141,11 +141,15 @@ void RayGen_Shade()
     float  metallic = gbuf_albedo[idx].a;
     float  roughness= matInf.r;
 
-    // ── 투명/반투명 픽셀: g_output 유지 (경로 추적 결과 보존) ────
+    // ── 투명/반투명 픽셀: 검은색 출력 ───────────────────────────
     // matInf.b < 0 은 유리/반투명 신호 (GBuffer.hlsl skipFlag=-1)
-    // ReSTIR DI는 불투명 표면만 처리 – 투명 픽셀은 건드리지 않음
+    // ReSTIR DI는 굴절/투과 처리 불가 → 검은색으로 덮어쓰기
+    // (return만 하면 경로 추적기의 이전 출력이 남아 고스트 현상 발생)
     if (matInf.b < 0.0f)
+    {
+        g_output[idx] = float4(0, 0, 0, 1);
         return;
+    }
 
     // ── 발광 픽셀: emission 직접 출력 ────────────────────────────
     uint  matIdx  = uint(normData.w + 0.5f);
