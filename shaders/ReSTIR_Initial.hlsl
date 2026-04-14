@@ -35,7 +35,7 @@ Texture2D<float4>              gbuf_matInfo   : register(t9);
 StructuredBuffer<LightData>    g_lightList    : register(t5);
 RWStructuredBuffer<Reservoir>  reservoir_cur  : register(u6);
 
-cbuffer SceneConstants  : register(b0) { float4 _sc[16]; }
+cbuffer SceneConstants  : register(b0) { float3 camPos; uint sceneID; float4 _sc[15]; }
 cbuffer ReSTIRConstants : register(b1)
 {
     float4   _prevCam[4];
@@ -77,10 +77,7 @@ void CS_Initial(uint3 tid : SV_DispatchThreadID)
     float  metallic  = albData.a;
     float  roughness = matInf.r;
 
-    // TODO [Session 1]: 카메라 위치에서 V 복원 (SceneCB.camPos 필요)
-    // SceneCB b0 에 camPos(float3)가 있으므로 cbuffer 선언 수정 후:
-    //   float3 V = normalize(camPos - hitPos);
-    float3 V = float3(0, 1, 0);   // STUB – SceneCB.camPos - hitPos 정규화로 교체
+    float3 V = normalize(camPos - hitPos);
 
     // RNG 초기화
     uint seed = (px.x * 1973u + px.y * 9277u + frameIndex * 26699u) | 1u;
@@ -135,10 +132,4 @@ void CS_Initial(uint3 tid : SV_DispatchThreadID)
     reservoir_cur[pidx] = R;
 }
 
-// ── WangHash (Common_ReSTIR.hlsli에 없으면 여기서 정의) ─────────
-uint WangHash(uint s)
-{
-    s = (s ^ 61u) ^ (s >> 16u); s *= 9u;
-    s ^= s >> 4u; s *= 0x27d4eb2du; s ^= s >> 15u;
-    return s;
-}
+// WangHash는 Common_ReSTIR.hlsli에 정의됨

@@ -161,6 +161,7 @@ void RayGen_Shade()
 
     // ── ReSTIR 직접광 ─────────────────────────────────────────
     Reservoir R = reservoir_cur[pidx];
+
     float3 directLight = float3(0, 0, 0);
 
     if (R.lightIdx != 0xFFFFFFFFu && R.W > 0.0f)

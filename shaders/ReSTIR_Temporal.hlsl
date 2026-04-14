@@ -109,16 +109,31 @@ bool Reproject(uint2 px, float curDepth, float3 curN,
     //     motionVec[px] = prevUV - curUV  (화면공간 오프셋)
     //     여기서 직접 계산하는 방식이 더 단순함 (motionVec 없어도 동작)
 
-    // TODO [Session 2]:
-    // 1. motionVec[px] 읽기 (또는 위 수식으로 직접 재투영)
-    // 2. prevPx = px + round(motionVec)
-    // 3. 유효 범위 검사 (IsValidPixel)
-    // 4. 이전 G-Buffer 읽어 깊이/법선 비교
-    //    |prevDepth - curDepth| / curDepth < k_depthThreshold
-    //    dot(prevN, curN) > k_normalThreshold
-    // 5. 유효성 반환
-    prevPx = int2(px);
-    return false;  // STUB
+    // 이전 카메라로 월드 위치 재투영
+    float3 worldPos = gbuf_worldPos[px].xyz;
+    float3 delta    = worldPos - _prevCam[0].xyz;   // _prevCam[0].xyz = prevCamPos
+
+    float prevViewZ = dot(delta, _prevCam[3].xyz);  // _prevCam[3].xyz = prevCamForward
+    if (prevViewZ <= 0.0f) { prevPx = int2(px); return false; }
+
+    float prevTanHFov  = _prevCam[1].w;  // prevTanHalfFovY
+    float prevAspect   = _prevCam[2].w;  // prevAspectRatio
+
+    float prevNDC_x = dot(delta, _prevCam[1].xyz) / (prevViewZ * prevAspect * prevTanHFov);
+    float prevNDC_y = dot(delta, _prevCam[2].xyz) / (prevViewZ * prevTanHFov);
+
+    // NDC[-1,1] → UV[0,1] → 픽셀 좌표 (Y 반전)
+    float2 prevUV = float2(prevNDC_x, -prevNDC_y) * 0.5f + 0.5f;
+    prevPx = int2(prevUV * float2(screenW, screenH));
+
+    if (!IsValidPixel(prevPx, screenW, screenH)) return false;
+
+    float prevDepth = gbuf_matInfo[uint2(prevPx)].g;
+    float3 prevN    = gbuf_normal[uint2(prevPx)].xyz;
+
+    bool depthOk  = abs(prevDepth - curDepth) / max(curDepth, 1e-4f) < k_depthThreshold;
+    bool normalOk = dot(prevN, curN) > k_normalThreshold;
+    return depthOk && normalOk;
 }
 
 // ── 진입점 ───────────────────────────────────────────────────
@@ -144,7 +159,7 @@ void CS_Temporal(uint3 tid : SV_DispatchThreadID)
     float  metallic = gbuf_albedo[px].a;
     float  roughness= matInf.r;
     float  depth    = matInf.g;
-    float3 V        = float3(0,1,0);  // STUB – SceneCB.camPos - hitPos 정규화
+    float3 V        = normalize(camPos - hitPos);
 
     // RNG
     uint seed = (px.x * 1973u + px.y * 9277u + frameIndex * 26699u + 7919u) | 1u;

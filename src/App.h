@@ -28,6 +28,12 @@ private:
     void BuildBLASes();
     void BuildDescriptors();
     void SwitchScene(uint32_t id);
+    void BuildGBufferPSO();
+    void BuildShadePSO();
+
+    // ReSTIR 헬퍼
+    void UpdateReSTIRCB();
+    std::vector<LightData> BuildLightList(uint32_t sceneID) const;
 
     // 프레임 업데이트
     void ProcessInput(float dt);
@@ -84,6 +90,8 @@ private:
     ComPtr<ID3D12StateObjectProperties> m_gbufferPSOProps;
     ComPtr<ID3D12StateObject>           m_shadePSO;     // ReSTIR_Shade.hlsl
     ComPtr<ID3D12StateObjectProperties> m_shadePSOProps;
+    ShaderTable                         m_gbufferShaderTable;
+    ShaderTable                         m_shadeShaderTable;
 
     // ReSTIR 이전 프레임 카메라 (재투영용)
     Camera   m_prevCamera;

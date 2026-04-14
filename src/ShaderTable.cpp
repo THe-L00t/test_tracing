@@ -47,10 +47,11 @@ void ShaderTable::Build(ID3D12Device* device, const Desc& desc)
     m_hitGroupOffset = k_recordSize * 3;     // HitGroup
 
     // 각 레코드에 셰이더 ID 복사 (나머지 바이트는 0으로 초기화됨)
-    std::memcpy(mapped + m_rayGenOffset,            desc.rayGenID,   k_idSize);
-    std::memcpy(mapped + m_missOffset,              desc.missID,     k_idSize);
-    std::memcpy(mapped + m_missOffset + k_recordSize, desc.missID2,  k_idSize);
-    std::memcpy(mapped + m_hitGroupOffset,          desc.hitGroupID, k_idSize);
+    // nullptr 이면 해당 레코드는 0으로 채움 (미사용 슬롯 안전 처리)
+    if (desc.rayGenID)   std::memcpy(mapped + m_rayGenOffset,              desc.rayGenID,   k_idSize);
+    if (desc.missID)     std::memcpy(mapped + m_missOffset,                desc.missID,     k_idSize);
+    if (desc.missID2)    std::memcpy(mapped + m_missOffset + k_recordSize, desc.missID2,    k_idSize);
+    if (desc.hitGroupID) std::memcpy(mapped + m_hitGroupOffset,            desc.hitGroupID, k_idSize);
 
     m_buffer->Unmap(0, nullptr);
 }
