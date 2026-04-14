@@ -414,9 +414,25 @@ void RayGen_Shade()
         }
     }
 
-    // ── 합산 → Reinhard 톤매핑 → gamma 보정 ───────────────────────
+    // ── Firefly 억제: 간접광 휘도 상한 클램핑 ────────────────────
+    // 1spp 경로에서 가끔 발생하는 극단적 스파이크(firefly) 제거
+    float indLum = dot(indirectLight, float3(0.2126f, 0.7152f, 0.0722f));
+    if (indLum > 5.0f)
+        indirectLight *= 5.0f / indLum;
+
+    // ── 시간적 누적 → Reinhard 톤매핑 → gamma 보정 ───────────────
+    // frameCount=0: 카메라 이동·씬 전환 시 리셋 → 누적 초기화
+    // frameCount=N: 1/(N+1) 지수 이동 평균 → 수렴하면서 번쩍임 소멸
     float3 total = directLight + indirectLight;
-    float3 color = total / (total + 1.0f);
+    float3 accumulated;
+    if (frameCount == 0u)
+        accumulated = total;
+    else
+        accumulated = lerp(g_accumulation[idx].rgb, total,
+                           1.0f / float(frameCount + 1u));
+    g_accumulation[idx] = float4(accumulated, 1.0f);
+
+    float3 color = accumulated / (accumulated + 1.0f);
     color = pow(max(color, 0.0f), 1.0f / 2.2f);
     g_output[idx] = float4(color, 1.0f);
 }
