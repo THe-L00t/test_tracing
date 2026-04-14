@@ -238,3 +238,105 @@ bool IsValidPixel(int2 px, uint w, uint h)
     return px.x >= 0 && px.y >= 0
         && uint(px.x) < w && uint(px.y) < h;
 }
+
+// ── ONB (법선 기반 접선 공간) ────────────────────────────────────
+void BuildONB(float3 N, out float3 T, out float3 B)
+{
+    if (abs(N.x) > 0.9f)
+        T = normalize(cross(float3(0.0f, 1.0f, 0.0f), N));
+    else
+        T = normalize(cross(float3(1.0f, 0.0f, 0.0f), N));
+    B = cross(N, T);
+}
+
+// ── 코사인 가중 반구 샘플링 ──────────────────────────────────────
+float3 CosineSampleHemisphere(float2 u, float3 N)
+{
+    float r   = sqrt(u.x);
+    float phi = TWO_PI * u.y;
+    float lx  = r * cos(phi);
+    float lz  = r * sin(phi);
+    float ly  = sqrt(max(0.0f, 1.0f - u.x));
+    float3 T, B;
+    BuildONB(N, T, B);
+    return normalize(T * lx + N * ly + B * lz);
+}
+
+// ── GGX VNDF 샘플링 (Heitz 2018) ───────────────────────────────
+// alpha = roughness^2, V: 시점 방향(세계 공간), N: 표면 법선
+float3 SampleGGX_VNDF(float2 u, float alpha, float3 V, float3 N, out float VdotH)
+{
+    float3 T, B;
+    BuildONB(N, T, B);
+    float3 Vl = float3(dot(V, T), dot(V, B), dot(V, N));
+    float3 Vh = normalize(float3(alpha * Vl.x, alpha * Vl.y, Vl.z));
+
+    float  lensq = Vh.x * Vh.x + Vh.y * Vh.y;
+    float3 T1    = (lensq > 1e-8f)
+        ? float3(-Vh.y, Vh.x, 0.0f) * rsqrt(lensq)
+        : float3(1.0f, 0.0f, 0.0f);
+    float3 T2 = cross(Vh, T1);
+
+    float r   = sqrt(u.x);
+    float phi = TWO_PI * u.y;
+    float t1  = r * cos(phi);
+    float t2  = r * sin(phi);
+    float s   = 0.5f * (1.0f + Vh.z);
+    t2 = lerp(sqrt(max(0.0f, 1.0f - t1 * t1)), t2, s);
+
+    float3 Nh = t1 * T1 + t2 * T2
+              + sqrt(max(0.0f, 1.0f - t1 * t1 - t2 * t2)) * Vh;
+    float3 Ne = normalize(float3(alpha * Nh.x, alpha * Nh.y, max(0.0f, Nh.z)));
+    float3 H  = normalize(T * Ne.x + B * Ne.y + N * Ne.z);
+    VdotH     = max(dot(V, H), 0.0001f);
+    return normalize(reflect(-V, H));
+}
+
+// ── BRDF 샘플링 (Specular + Diffuse 혼합 PDF) ──────────────────
+// 반환: 산란 방향
+// out attenuation: (f_spec+f_diff)·NdotL / p_mix
+// out pdf:         혼합 PDF
+float3 SampleBRDF(float3 N, float3 V,
+                  float3 albedo, float metallic, float roughness,
+                  inout uint seed,
+                  out float3 attenuation, out float pdf)
+{
+    float  alpha  = max(roughness * roughness, 0.001f);
+    float  alpha2 = alpha * alpha;
+    float  NdotV  = max(dot(N, V), 0.0001f);
+    float3 F0     = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+    float  pSpec  = metallic;
+    float  pDiff  = 1.0f - metallic;
+    float  G1v    = G1_Smith(NdotV, alpha2);
+
+    float3 scatterDir;
+    float  VdotH;
+
+    if (RandFloat(seed) < pSpec)
+    {
+        float2 u   = float2(RandFloat(seed), RandFloat(seed));
+        scatterDir = SampleGGX_VNDF(u, alpha, V, N, VdotH);
+    }
+    else
+    {
+        float2 u   = float2(RandFloat(seed), RandFloat(seed));
+        scatterDir = CosineSampleHemisphere(u, N);
+        float3 H   = normalize(V + scatterDir);
+        VdotH      = max(dot(V, H), 0.0001f);
+    }
+
+    float  NdotL = max(dot(N, scatterDir), 0.0001f);
+    float3 H     = normalize(V + scatterDir);
+    float  NdotH = max(dot(N, H), 0.0001f);
+    float  G1l   = G1_Smith(NdotL, alpha2);
+    float  D     = D_GGX(NdotH, alpha2);
+    float3 F     = SchlickF(VdotH, F0);
+
+    float  a_pdf  = D * G1v / (4.0f * NdotV);
+    float  b      = NdotL * INV_PI;
+    pdf           = max(pSpec * a_pdf + pDiff * b, 1e-8f);
+
+    float3 fNdotL = a_pdf * G1l * F + (1.0f - F) * pDiff * albedo * b;
+    attenuation   = fNdotL / pdf;
+    return scatterDir;
+}

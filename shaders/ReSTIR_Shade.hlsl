@@ -2,17 +2,24 @@
 //  ReSTIR_Shade.hlsl  –  [Pass 5] Final Shading
 //
 //  역할: Reservoir의 최종 선택 광원으로 shadow ray를 쏘고
-//        직접광을 계산하여 g_output에 기록.
+//        직접광을 계산한 뒤, 1-bounce 간접광을 BRDF 샘플링으로 합산.
 //
-//  렌더링 방정식 (Bitterli 2020, Eq.5):
+//  렌더링 방정식:
+//    L_total = L_direct(ReSTIR, Eq.5) + L_indirect(1-bounce Path Tracer)
 //    L_direct = f_r(V,L,N) * Li * NdotL * vis * R.W
-//    R.W = wSum / (M * p̂(selected))
+//    L_indirect = SampleBRDF(N,V) → TraceRay → radiance at bounce
 //
 //  픽셀 분류:
 //    1. 배경 (hitDist < 0)         → sky gradient
-//    2. 유리 (flags == GB_GLASS)   → 환경광 근사 (ReSTIR 굴절 미지원)
+//    2. 유리 (flags == GB_GLASS)   → Fresnel 굴절/반사 레이 추적
 //    3. 발광 (flags == GB_EMISSIVE)→ emission 직접 출력
-//    4. 일반                       → ShadowVis + GGX BRDF + ambient
+//    4. 일반                       → ReSTIR 직접광 + 1-bounce 간접광
+//
+//  셰이더 구성:
+//    RayGen_Shade      – 메인 Shade
+//    MissIndirect_Shade– 간접/굴절 레이 미스 (Miss[0])
+//    MissShadow_Shade  – 그림자 레이 미스  (Miss[1])
+//    ClosestHit_Shade  – 간접/굴절 레이 ClosestHit (HitGroup[0])
 //
 //  입력:  G-Buffer SRV (t6-t9), reservoir_in SRV (t10), TLAS (t0)
 //  출력:  g_output UAV (u0)
@@ -63,14 +70,81 @@ cbuffer ReSTIRConstants : register(b1)
     float4 _pad[2];
 }
 
-// ── 그림자 레이 페이로드 ─────────────────────────────────────
-struct ShadowPayload { float vis; };
+// ── 페이로드 ──────────────────────────────────────────────────
+struct ShadowPayload   { float vis; };                  // 4 bytes
+struct IndirectPayload { float3 radiance; uint seed; }; // 16 bytes
+
+// Miss[0]: 간접광/굴절 레이가 아무것도 맞지 않음 = 하늘 방사
+[shader("miss")]
+void MissIndirect_Shade(inout IndirectPayload payload)
+{
+    float3 d = normalize(WorldRayDirection());
+    float  t = saturate(0.5f * (d.y + 1.0f));
+    float3 sky = lerp(float3(1.0f, 1.0f, 1.0f), float3(0.5f, 0.7f, 1.0f), t);
+    if (sceneID == 0)
+    {
+        float3 sunDir = normalize(float3(1.0f, 2.0f, -0.5f));
+        sky += float3(1.0f, 0.9f, 0.7f) * pow(max(dot(d, sunDir), 0.0f), 128.0f);
+    }
+    payload.radiance = sky;
+}
 
 // Miss[1]: 그림자 레이가 아무것도 맞지 않음 = 광원 가시
 [shader("miss")]
 void MissShadow_Shade(inout ShadowPayload payload)
 {
     payload.vis = 1.0f;
+}
+
+// ── ClosestHit_Shade: 간접광/굴절 레이가 표면에 맞닿음 ──────────
+// 재귀 없이 emission 또는 반구 앰비언트를 반환
+[shader("closesthit")]
+void ClosestHit_Shade(inout IndirectPayload payload,
+                      BuiltInTriangleIntersectionAttributes attr)
+{
+    uint rawID    = InstanceID();
+    uint geomType = rawID & 0xFu;
+    uint matIdx   = rawID >> 4u;
+
+    uint   primIdx = PrimitiveIndex();
+    float2 bary    = attr.barycentrics;
+    float3 b       = float3(1.0f - bary.x - bary.y, bary.x, bary.y);
+    uint   vi      = primIdx * 3;
+
+    float3 n0, n1, n2;
+    if      (geomType == 0u) { n0=g_vbPlane[vi].normal;  n1=g_vbPlane[vi+1].normal;  n2=g_vbPlane[vi+2].normal;  }
+    else if (geomType == 2u) { n0=g_vbRoom[vi].normal;   n1=g_vbRoom[vi+1].normal;   n2=g_vbRoom[vi+2].normal;   }
+    else if (geomType == 3u) { n0=g_vbSphere[vi].normal; n1=g_vbSphere[vi+1].normal; n2=g_vbSphere[vi+2].normal; }
+    else                     { n0=g_vbCube[vi].normal;   n1=g_vbCube[vi+1].normal;   n2=g_vbCube[vi+2].normal;   }
+
+    float3 rawN   = normalize(n0 * b.x + n1 * b.y + n2 * b.z);
+    float3 rayDir = normalize(WorldRayDirection());
+    float3 N      = dot(rawN, -rayDir) > 0.0f ? rawN : -rawN;  // 입사면 기준 법선
+
+    float3 albedo   = matAlbedoRoughness[matIdx].xyz;
+    float  metallic = matMetallic[matIdx];
+    float  emissive = matEmissive[matIdx];
+
+    // 발광: emission 직접 반환
+    if (emissive > 0.0f)
+    {
+        payload.radiance = albedo * emissive;
+        return;
+    }
+
+    // 유리/반투명: albedo 틴트로 투과 근사 (재귀 불가)
+    if (emissive < -0.5f)
+    {
+        payload.radiance = albedo * float3(0.85f, 0.90f, 0.95f);
+        return;
+    }
+
+    // 불투명 표면: 반구 앰비언트 (직접광은 이 단계에서 추가 shadow ray 없음)
+    float  upFactor  = saturate(N.y * 0.5f + 0.5f);
+    float3 ambSky    = float3(0.20f, 0.28f, 0.40f);
+    float3 ambGnd    = float3(0.06f, 0.05f, 0.04f);
+    payload.radiance = albedo * lerp(ambGnd, ambSky, upFactor)
+                       * (1.0f - metallic * 0.7f);
 }
 
 // 그림자 레이 발사 → 가시성 반환 (0=차폐, 1=가시)
@@ -149,21 +223,35 @@ void RayGen_Shade()
     float  metallic = gbuf_albedo[idx].a;
     float  roughness= matInf.r;
     float  flags    = matInf.b;
+    float3 V        = normalize(camPos - hitPos);  // 시점 방향 (공통)
 
-    // ── 유리/반투명 픽셀: 환경광 근사 ─────────────────────────────
-    // ReSTIR DI는 굴절 미지원 → 환경광을 albedo로 tint하여 근사
+    // ── 유리/반투명 픽셀: Fresnel 굴절/반사 레이 추적 ───────────
     if (flags > 0.5f && flags < 1.5f)  // GB_FLAG_GLASS
     {
-        float2 uv  = ((float2)idx + 0.5f) / (float2)dim;
-        float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-        float3 dir = normalize(camForward
-                               + camRight * (ndc.x * aspectRatio * tanHalfFovY)
-                               + camUp    * (ndc.y * tanHalfFovY));
-        float  sky_t   = saturate(0.5f * (dir.y + 1.0f));
-        float3 envColor = lerp(float3(0.15f, 0.10f, 0.08f),
-                               float3(0.40f, 0.55f, 0.80f), sky_t);
-        float3 tinted = envColor * (0.6f + 0.4f * albedo);
-        float3 c = tinted / (tinted + 1.0f);
+        // G-Buffer N은 face-forward (카메라 기준 항상 입사면)
+        float  ior     = 1.5f;
+        float3 inc     = -V;
+        float  cosTheta = max(dot(N, V), 0.0f);
+        float  r0       = (1.0f - ior) / (1.0f + ior); r0 *= r0;
+        float  fresnel  = r0 + (1.0f - r0) * pow(1.0f - cosTheta, 5.0f);
+        float3 refracted = refract(inc, N, 1.0f / ior);
+        bool   tir       = dot(refracted, refracted) < 0.0001f;
+
+        uint   gseed      = WangHash(pidx ^ (frameIndex * 0x9E3779B9u));
+        float3 scatterDir = (tir || RandFloat(gseed) < fresnel)
+                            ? reflect(inc, N) : refracted;
+
+        IndirectPayload gp = (IndirectPayload)0;
+        gp.seed = gseed;
+        RayDesc gr;
+        gr.Origin    = hitPos + scatterDir * 0.002f;
+        gr.Direction = scatterDir;
+        gr.TMin      = 0.001f;
+        gr.TMax      = 1e6f;
+        TraceRay(g_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, gr, gp);
+
+        float3 glassColor = gp.radiance * albedo;
+        float3 c = glassColor / (glassColor + 1.0f);
         c = pow(max(c, 0.0f), 1.0f / 2.2f);
         g_output[idx] = float4(c, 1.0f);
         return;
@@ -183,7 +271,6 @@ void RayGen_Shade()
 
     // ── 일반 픽셀: ReSTIR 직접광 (Bitterli 2020, Eq.5) ───────────
     Reservoir R = reservoir_in[pidx];
-    float3 V = normalize(camPos - hitPos);
 
     float3 directLight = float3(0.0f, 0.0f, 0.0f);
 
@@ -221,15 +308,29 @@ void RayGen_Shade()
         }
     }
 
-    // ── 반구 앰비언트 (직접광만으로는 음영면 완전 검은색 방지) ────
-    float  upFactor    = saturate(N.y * 0.5f + 0.5f);
-    float3 ambientSky  = float3(0.20f, 0.28f, 0.40f);
-    float3 ambientGnd  = float3(0.06f, 0.05f, 0.04f);
-    float3 ambient     = albedo * lerp(ambientGnd, ambientSky, upFactor)
-                         * (1.0f - metallic * 0.7f);
+    // ── 1-bounce 간접광 (BRDF 샘플링 + Path Tracer 통합) ─────────
+    uint   indSeed = WangHash(pidx ^ (frameIndex * 0x9E3779B9u) ^ (frameCount * 0x517CC1B7u));
+    float3 indAtten;
+    float  indPdf;
+    float3 indDir  = SampleBRDF(N, V, albedo, metallic, roughness,
+                                indSeed, indAtten, indPdf);
+    float3 indirectLight = float3(0.0f, 0.0f, 0.0f);
+
+    if (dot(indDir, N) > 0.0f)
+    {
+        IndirectPayload ip = (IndirectPayload)0;
+        ip.seed = indSeed;
+        RayDesc ir;
+        ir.Origin    = hitPos + N * 0.001f;
+        ir.Direction = indDir;
+        ir.TMin      = 0.001f;
+        ir.TMax      = 1e6f;
+        TraceRay(g_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ir, ip);
+        indirectLight = indAtten * ip.radiance;
+    }
 
     // ── 합산 → Reinhard 톤매핑 → gamma 보정 ───────────────────────
-    float3 total = directLight + ambient;
+    float3 total = directLight + indirectLight;
     float3 color = total / (total + 1.0f);
     color = pow(max(color, 0.0f), 1.0f / 2.2f);
     g_output[idx] = float4(color, 1.0f);

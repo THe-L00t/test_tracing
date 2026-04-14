@@ -1026,40 +1026,57 @@ void App::BuildGBufferPSO()
 
 // ---------------------------------------------------------------
 //  Shade PSO 빌드
-//  셰이더: RayGen_Shade, MissShadow_Shade (ReSTIR_Shade.hlsl)
-//  페이로드: ShadowPayload = float = 4 bytes
-//  그림자 레이: MissShader index 1, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER
+//  셰이더: RayGen_Shade, MissIndirect_Shade, MissShadow_Shade,
+//          ClosestHit_Shade  (ReSTIR_Shade.hlsl)
+//
+//  레이 인덱스:
+//    Miss[0] = MissIndirect_Shade  – 간접광/굴절 레이 미스
+//    Miss[1] = MissShadow_Shade    – 그림자 레이 미스
+//    HitGroup[0] = HitGroup_Shade  – ClosestHit_Shade (간접광 bounce)
+//
+//  페이로드 최대: IndirectPayload (float3 + uint = 16 bytes)
+//  재귀 깊이: 1 (RayGen에서만 TraceRay, ClosestHit_Shade 내 추가 레이 없음)
 // ---------------------------------------------------------------
 void App::BuildShadePSO()
 {
     auto dxil = CompileDXRLib(L"shaders/ReSTIR_Shade.hlsl");
 
     D3D12_EXPORT_DESC exports[] = {
-        { L"RayGen_Shade",     nullptr, D3D12_EXPORT_FLAG_NONE },
-        { L"MissShadow_Shade", nullptr, D3D12_EXPORT_FLAG_NONE },
+        { L"RayGen_Shade",       nullptr, D3D12_EXPORT_FLAG_NONE },
+        { L"MissIndirect_Shade", nullptr, D3D12_EXPORT_FLAG_NONE },
+        { L"MissShadow_Shade",   nullptr, D3D12_EXPORT_FLAG_NONE },
+        { L"ClosestHit_Shade",   nullptr, D3D12_EXPORT_FLAG_NONE },
     };
     D3D12_DXIL_LIBRARY_DESC lib{};
     lib.DXILLibrary = { dxil->GetBufferPointer(), dxil->GetBufferSize() };
     lib.NumExports  = static_cast<UINT>(std::size(exports));
     lib.pExports    = exports;
 
-    // 그림자 레이는 RAY_FLAG_SKIP_CLOSEST_HIT_SHADER 이므로 HitGroup 불필요
-    // 하지만 DispatchRays API에 HitGroup 테이블이 요구됨 → 빈 레코드로 처리
+    // 간접광/굴절 레이 ClosestHit 히트 그룹
+    D3D12_HIT_GROUP_DESC hitGroup{};
+    hitGroup.HitGroupExport         = L"HitGroup_Shade";
+    hitGroup.Type                   = D3D12_HIT_GROUP_TYPE_TRIANGLES;
+    hitGroup.ClosestHitShaderImport = L"ClosestHit_Shade";
+
+    // IndirectPayload: float3(12) + uint(4) = 16 bytes > ShadowPayload(4)
     D3D12_RAYTRACING_SHADER_CONFIG sc{};
-    sc.MaxPayloadSizeInBytes   = 4;    // ShadowPayload: float vis
+    sc.MaxPayloadSizeInBytes   = 16;
     sc.MaxAttributeSizeInBytes = 8;
 
+    // RayGen → TraceRay(indirect|shadow): 깊이 1
+    // ClosestHit_Shade는 추가 TraceRay 없음 → 깊이 1로 충분
     D3D12_RAYTRACING_PIPELINE_CONFIG pc{};
-    pc.MaxTraceRecursionDepth = 1;     // shadow ray 1회
+    pc.MaxTraceRecursionDepth = 1;
 
     D3D12_GLOBAL_ROOT_SIGNATURE grs{};
     grs.pGlobalRootSignature = m_globalRS.Get();
 
-    D3D12_STATE_SUBOBJECT subs[4]{};
-    subs[0] = { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,               &lib };
-    subs[1] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,   &sc  };
-    subs[2] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pc  };
-    subs[3] = { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,      &grs };
+    D3D12_STATE_SUBOBJECT subs[5]{};
+    subs[0] = { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,               &lib      };
+    subs[1] = { D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,                  &hitGroup };
+    subs[2] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,   &sc       };
+    subs[3] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pc       };
+    subs[4] = { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,      &grs      };
 
     D3D12_STATE_OBJECT_DESC soDesc{};
     soDesc.Type          = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
@@ -1071,12 +1088,12 @@ void App::BuildShadePSO()
 
     ShaderTable::Desc stDesc{};
     stDesc.rayGenID   = m_shadePSOProps->GetShaderIdentifier(L"RayGen_Shade");
-    stDesc.missID     = nullptr;   // Miss[0] 미사용 (그림자 레이는 Miss[1] 사용)
+    stDesc.missID     = m_shadePSOProps->GetShaderIdentifier(L"MissIndirect_Shade");
     stDesc.missID2    = m_shadePSOProps->GetShaderIdentifier(L"MissShadow_Shade");
-    stDesc.hitGroupID = nullptr;   // 그림자 레이는 closest hit 호출 안 함
+    stDesc.hitGroupID = m_shadePSOProps->GetShaderIdentifier(L"HitGroup_Shade");
     m_shadeShaderTable.Build(m_core.Device(), stDesc);
 
-    std::println("[App] Shade PSO 완료");
+    std::println("[App] Shade PSO 완료 (직접광 ReSTIR + 1-bounce 간접광 + 유리 굴절)");
 }
 
 // ---------------------------------------------------------------
