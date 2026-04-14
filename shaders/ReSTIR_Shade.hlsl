@@ -141,13 +141,24 @@ void RayGen_Shade()
     float  metallic = gbuf_albedo[idx].a;
     float  roughness= matInf.r;
 
-    // ── 투명/반투명 픽셀: 검은색 출력 ───────────────────────────
+    // ── 투명/반투명 픽셀: 유리 근사 출력 ────────────────────────
     // matInf.b < 0 은 유리/반투명 신호 (GBuffer.hlsl skipFlag=-1)
-    // ReSTIR DI는 굴절/투과 처리 불가 → 검은색으로 덮어쓰기
-    // (return만 하면 경로 추적기의 이전 출력이 남아 고스트 현상 발생)
+    // ReSTIR DI는 굴절 미지원 → 재질 색상으로 환경광 근사 출력
     if (matInf.b < 0.0f)
     {
-        g_output[idx] = float4(0, 0, 0, 1);
+        // 유리: albedo 색조를 띤 환경광 근사 (ghost 방지 + 검은색 방지)
+        float3 glassAlbedo  = gbuf_albedo[idx].rgb;
+        float2 uv  = ((float2)idx + 0.5f) / (float2)dim;
+        float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+        float3 dir = normalize(camForward + camRight*(ndc.x*aspectRatio*tanHalfFovY)
+                               + camUp*(ndc.y*tanHalfFovY));
+        float  sky_t = saturate(0.5f * (dir.y + 1.0f));
+        float3 envColor = lerp(float3(0.15f,0.10f,0.08f),
+                               float3(0.40f,0.55f,0.80f), sky_t);
+        float3 tinted = envColor * (0.6f + 0.4f * glassAlbedo);
+        float3 c = tinted / (tinted + 1.0f);
+        c = pow(max(c, 0.0f), 1.0f / 2.2f);
+        g_output[idx] = float4(c, 1.0f);
         return;
     }
 
@@ -226,8 +237,16 @@ void RayGen_Shade()
     // TraceRay → ClosestHit에서 NEE 없이 emission만 반환하는 단순 bounce
     // indirectLight = atten * bounceResult
 
+    // ── 반구 앰비언트 (직접광만 있으면 빛 못받는 면이 완전 검은색)
+    // 법선이 위를 향할수록 밝은 하늘색, 아래를 향할수록 어두운 지면색
+    float upFactor    = saturate(N.y * 0.5f + 0.5f);
+    float3 ambientSky = float3(0.20f, 0.28f, 0.40f);
+    float3 ambientGnd = float3(0.06f, 0.05f, 0.04f);
+    float3 ambient    = albedo * lerp(ambientGnd, ambientSky, upFactor)
+                        * (1.0f - metallic * 0.7f);  // 메탈릭은 앰비언트 감소
+
     // ── 합산 및 출력 ─────────────────────────────────────────
-    float3 total = directLight + indirectLight;
+    float3 total = directLight + indirectLight + ambient;
 
     float3 color = total / (total + 1.0f);
     color = pow(max(color, 0.0f), 1.0f / 2.2f);
