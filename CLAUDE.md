@@ -56,7 +56,12 @@ C:\Users\sigun\.claude\projects\C--Users-sigun-University------test-tracing\memo
 - **해결된 문제** 또는 구현된 기능
 - **남은 작업** (다음에 해야 할 것)
 
-## 2. 매 수정 후 커밋
+## 2. 빌드 테스트는 사용자에게 위임
+
+**빌드(MSBuild, cmake 등) 및 런타임 테스트를 직접 실행하지 않는다.**  
+코드 작성 완료 후 "빌드하여 확인해 주세요"로 사용자에게 넘긴다.
+
+## 4. 매 수정 후 커밋
 
 코드 수정이 완료될 때마다 반드시 git commit을 생성한다:
 
@@ -64,7 +69,7 @@ C:\Users\sigun\.claude\projects\C--Users-sigun-University------test-tracing\memo
 - 커밋 단위는 논리적으로 완결된 하나의 변경 (버그 하나 수정, 기능 하나 추가 등)
 - 커밋 전 `git diff`로 의도치 않은 변경이 포함되지 않았는지 확인
 
-## 3. 진행 상황 파일 갱신
+## 5. 진행 상황 파일 갱신
 
 작업을 진행할 때마다 `project_restir.md`를 최신 상태로 갱신한다:
 

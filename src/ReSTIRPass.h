@@ -6,36 +6,39 @@
 // ──────────────────────────────────────────────────────────────
 //  ReSTIRPass – G-Buffer / Reservoir 버퍼 + Compute/DXR 파이프라인 관리
 //
-//  디스크립터 힙 슬롯 레이아웃 (ReSTIRPass::Init 후):
-//   Slot  7: UAV u2 – gbuf_worldPos  (RGBA32F)
-//   Slot  8: UAV u3 – gbuf_normal    (RGBA32F)
-//   Slot  9: UAV u4 – gbuf_albedo    (RGBA8)
-//   Slot 10: UAV u5 – gbuf_matInfo   (RGBA32F)
-//   Slot 11: UAV u6 – reservoir_cur  (RWStructuredBuffer<Reservoir>)
-//   Slot 12: UAV u7 – reservoir_prev (RWStructuredBuffer<Reservoir>)
-//   Slot 13: UAV u8 – motionVec      (RG32F)
-//   Slot 14: SRV t5 – lightList      (StructuredBuffer<LightData>)
-//   Slot 15: SRV t6 – gbuf_worldPos  (SRV 복사, compute pass용)
-//   Slot 16: SRV t7 – gbuf_normal    (SRV 복사)
-//   Slot 17: SRV t8 – gbuf_albedo    (SRV 복사)
-//   Slot 18: SRV t9 – gbuf_matInfo   (SRV 복사)
-//   Slot 19: SRV t10– motionVec      (SRV 복사)
-//   Slot 20: SRV t11– reservoir_in   (Spatial pass 입력용 SRV)
-//   Slot 21: SRV t12– reservoir_cur  (Shade pass 입력용 SRV)
+//  ── 힙 슬롯 레이아웃 (Init 후) ────────────────────────────────
+//   Slot  7: UAV u2 – gbuf_worldPos  RGBA32F
+//   Slot  8: UAV u3 – gbuf_normal    RGBA32F
+//   Slot  9: UAV u4 – gbuf_albedo    RGBA8
+//   Slot 10: UAV u5 – gbuf_matInfo   RGBA32F
+//   Slot 11: UAV u6 – reservoir_cur  RWStructuredBuffer  ← CopyDescriptor로 동적
+//   Slot 12: UAV u7 – reservoir_prev RWStructuredBuffer  ← CopyDescriptor로 동적
+//   Slot 13: SRV t5 – lightList      StructuredBuffer<LightData>
+//   Slot 14: SRV t6 – gbuf_worldPos  Texture2D SRV
+//   Slot 15: SRV t7 – gbuf_normal    Texture2D SRV
+//   Slot 16: SRV t8 – gbuf_albedo    Texture2D SRV
+//   Slot 17: SRV t9 – gbuf_matInfo   Texture2D SRV
+//   Slot 18: SRV t10– reservoir_in   StructuredBuffer SRV ← CopyDescriptor로 동적
+//   Slots 19-22: 스테이징 (셰이더 비접근, CopyDescriptor 소스)
+//     19: ResA_UAV, 20: ResB_UAV, 21: ResA_SRV, 22: ResB_SRV
 //
-//  패스 실행 순서 (App::OnRender에서 호출):
-//   1. DispatchGBuffer    – DXR, G-Buffer 채우기
-//   2. DispatchInitial    – Compute, RIS 후보 생성
-//   3. DispatchTemporal   – Compute, 시간적 재사용
-//   4. DispatchSpatial    – Compute, 공간 재사용 2회
-//   5. SwapReservoirs     – cur ↔ prev 버퍼 교환 (다음 프레임을 위해)
-//   6. (Denoiser는 기존 Denoiser 클래스 재사용)
+//  ── 패스 실행 순서 (App::OnRender) ───────────────────────────
+//   1. DispatchGBuffer   – DXR primary ray → G-Buffer 채우기
+//   2. DispatchInitial   – CS, RIS 후보 생성 (Talbot 2005)
+//   3. DispatchTemporal  – CS, 시간적 재사용 (Bitterli 2020 Sec.4.3)
+//   4. DispatchSpatial   – CS, 공간 재사용 2회 ping-pong (Bitterli 2020 Alg.4)
+//   5. DispatchShade     – DXR, shadow ray + GGX BRDF → g_output
+//   6. SwapReservoirs    – cur/prev 버퍼 포인터 교환
+//
+//  ── 리소스 상태 관리 ─────────────────────────────────────────
+//   각 패스 함수가 자신의 진입/퇴장 시점에 확정적으로 전환함.
+//   m_gbufState, m_resAState, m_resBState 로 현재 상태 추적.
+//   TransitionRes() 헬퍼: 상태가 다를 때만 barrier 발행.
 // ──────────────────────────────────────────────────────────────
 class ReSTIRPass
 {
 public:
-    // 초기화: 모든 버퍼/PSO 생성, 힙에 디스크립터 등록
-    void Init(ID3D12Device5*     device,
+    void Init(ID3D12Device5*      device,
               DescriptorHeap&    heap,
               ID3D12RootSignature* globalRS,
               uint32_t           width,
@@ -43,94 +46,64 @@ public:
 
     void Shutdown();
 
-    // 해상도 변경 시 버퍼 재생성
     void Resize(ID3D12Device5*  device,
                 DescriptorHeap& heap,
                 uint32_t        width,
                 uint32_t        height);
 
-    // 광원 리스트 업로드 (씬 전환 시 호출)
     void UploadLights(ID3D12GraphicsCommandList* cmdList,
                       const std::vector<LightData>& lights);
 
-    // 상수 버퍼 업데이트 (매 프레임)
     void UpdateCB(const ReSTIRCB& cb);
 
     // ── 패스 디스패치 ─────────────────────────────────────────
-
-    // [Pass 1] G-Buffer: DXR primary ray
     void DispatchGBuffer(ID3D12GraphicsCommandList4* cmdList,
                          ID3D12StateObject*          gbufferPSO,
                          const ShaderTable&          shaderTable,
                          uint32_t width, uint32_t height);
 
-    // [Pass 2] Initial: Compute RIS
     void DispatchInitial(ID3D12GraphicsCommandList* cmdList,
                          uint32_t width, uint32_t height);
 
-    // [Pass 3] Temporal: Compute merge
     void DispatchTemporal(ID3D12GraphicsCommandList* cmdList,
                           uint32_t width, uint32_t height);
 
-    // [Pass 4] Spatial: Compute merge x2
     void DispatchSpatial(ID3D12GraphicsCommandList* cmdList,
                          uint32_t width, uint32_t height);
 
-    // [Pass 5] Shade: DXR shadow ray + GGX BRDF 최종 출력
     void DispatchShade(ID3D12GraphicsCommandList4* cmdList,
                        ID3D12StateObject*          shadePSO,
                        const ShaderTable&          shaderTable,
                        uint32_t width, uint32_t height);
 
-    // 프레임 마지막: cur ↔ prev 교환 (포인터 스왑, GPU 이동 없음)
+    // 프레임 마지막: cur/prev 포인터 교환 + 힙 슬롯 갱신
     void SwapReservoirs();
 
-    // ReSTIRCB GPU 가상 주소 (App::OnRender에서 루트 CBV 바인딩용)
     D3D12_GPU_VIRTUAL_ADDRESS RestirCBAddress() const noexcept
     {
         return m_restirCB ? m_restirCB->GetGPUVirtualAddress() : 0;
     }
 
-    // UAV 배리어 (패스 간 동기화)
-    void UAVBarrier(ID3D12GraphicsCommandList* cmdList);
-
-    // G-Buffer 클리어 (씬 전환 시)
+    // 씬 전환 시 G-Buffer 클리어 (hitDist=-1로 배경 마킹)
     void ClearGBuffer(ID3D12GraphicsCommandList* cmdList);
 
 private:
     // ── G-Buffer 텍스처 ──────────────────────────────────────
-    ComPtr<ID3D12Resource> m_gbWorldPos;   // RGBA32F
-    ComPtr<ID3D12Resource> m_gbNormal;     // RGBA32F
-    ComPtr<ID3D12Resource> m_gbAlbedo;     // RGBA8
-    ComPtr<ID3D12Resource> m_gbMatInfo;    // RGBA32F
+    ComPtr<ID3D12Resource> m_gbWorldPos;
+    ComPtr<ID3D12Resource> m_gbNormal;
+    ComPtr<ID3D12Resource> m_gbAlbedo;
+    ComPtr<ID3D12Resource> m_gbMatInfo;
 
-    DescriptorHandle m_gbWorldPosUAV;
-    DescriptorHandle m_gbNormalUAV;
-    DescriptorHandle m_gbAlbedoUAV;
-    DescriptorHandle m_gbMatInfoUAV;
+    DescriptorHandle m_gbWorldPosUAV, m_gbNormalUAV, m_gbAlbedoUAV, m_gbMatInfoUAV;
+    DescriptorHandle m_gbWorldPosSRV, m_gbNormalSRV, m_gbAlbedoSRV, m_gbMatInfoSRV;
 
-    DescriptorHandle m_gbWorldPosSRV;  // compute 패스용 SRV
-    DescriptorHandle m_gbNormalSRV;
-    DescriptorHandle m_gbAlbedoSRV;
-    DescriptorHandle m_gbMatInfoSRV;
-
-    // ── Reservoir 버퍼 (double-buffered) ────────────────────
-    ComPtr<ID3D12Resource> m_reservoirA;   // RWStructuredBuffer<Reservoir>
+    // ── Reservoir 버퍼 (double-buffered, A/B) ───────────────
+    ComPtr<ID3D12Resource> m_reservoirA;
     ComPtr<ID3D12Resource> m_reservoirB;
-    bool                   m_curIsA = true;  // SwapReservoirs로 교환
-
-    DescriptorHandle m_reservoirA_UAV;
-    DescriptorHandle m_reservoirB_UAV;
-    DescriptorHandle m_reservoirA_SRV;  // Spatial/Shade pass 입력
-    DescriptorHandle m_reservoirB_SRV;
-
-    // ── 모션 벡터 ────────────────────────────────────────────
-    ComPtr<ID3D12Resource> m_motionVec;    // RG32F
-    DescriptorHandle       m_motionVecUAV;
-    DescriptorHandle       m_motionVecSRV;
+    bool m_curIsA = true;  // true: cur=A(u6), prev=B(u7)
 
     // ── 광원 리스트 ──────────────────────────────────────────
-    ComPtr<ID3D12Resource> m_lightListBuf; // StructuredBuffer<LightData>
+    ComPtr<ID3D12Resource> m_lightListBuf;
     ComPtr<ID3D12Resource> m_lightListUpload;
     DescriptorHandle       m_lightListSRV;
     uint32_t               m_lightCount = 0;
@@ -139,40 +112,58 @@ private:
     ComPtr<ID3D12Resource> m_restirCB;
 
     // ── Compute PSO ──────────────────────────────────────────
-    ComPtr<ID3D12PipelineState> m_psoInitial;   // CS_Initial
-    ComPtr<ID3D12PipelineState> m_psoTemporal;  // CS_Temporal
-    ComPtr<ID3D12PipelineState> m_psoSpatial;   // CS_Spatial
+    ComPtr<ID3D12PipelineState> m_psoInitial;
+    ComPtr<ID3D12PipelineState> m_psoTemporal;
+    ComPtr<ID3D12PipelineState> m_psoSpatial;
 
     uint32_t m_width  = 0;
     uint32_t m_height = 0;
 
-    // ── 디바이스 (디스크립터 복사용) ──────────────────────────
-    ID3D12Device* m_device = nullptr;
-    uint32_t      m_descriptorIncrementSize = 0;
+    // ── 리소스 상태 추적 ────────────────────────────────────
+    // 각 패스 함수가 진입/퇴장 시 갱신. TransitionRes()가 barrier 발행 여부 판단.
+    D3D12_RESOURCE_STATES m_gbufState      = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    D3D12_RESOURCE_STATES m_resAState      = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    D3D12_RESOURCE_STATES m_resBState      = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    D3D12_RESOURCE_STATES m_lightListState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-    // ── 공간 ping-pong용 스테이징 핸들 (슬롯 22~25) ──────────
-    // CopyDescriptorsSimple 소스: same heap 내 non-shader 슬롯
+    // ── 디스크립터 동적 갱신용 ──────────────────────────────
+    // 힙 슬롯 11(u6), 12(u7), 18(t10) 의 CPU 핸들
+    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot11_cpu{};  // reservoir_cur  UAV
+    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot12_cpu{};  // reservoir_prev UAV
+    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot18_cpu{};  // reservoir_in   SRV
+
+    // 스테이징 소스 핸들 (CopyDescriptorsSimple 소스)
     D3D12_CPU_DESCRIPTOR_HANDLE m_stageResA_UAV{};
     D3D12_CPU_DESCRIPTOR_HANDLE m_stageResB_UAV{};
     D3D12_CPU_DESCRIPTOR_HANDLE m_stageResA_SRV{};
     D3D12_CPU_DESCRIPTOR_HANDLE m_stageResB_SRV{};
 
-    // ── 메인 힙 슬롯 핸들 (스왑/ping-pong 갱신 대상) ──────────
-    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot11_cpu{};  // u6  UAV reservoir_cur
-    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot12_cpu{};  // u7  UAV reservoir_prev
-    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot20_cpu{};  // t11 SRV reservoir_in
-    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot21_cpu{};  // t12 SRV reservoir_cur(shade)
-
-    // 리소스 상태 추적 (UAV ↔ NON_PIXEL_SHADER_RESOURCE)
-    bool m_gbufInSRVState = false;
-    bool m_resAInSRVState = false;  // reservoirA 현재 상태
-    bool m_resBInSRVState = false;  // reservoirB 현재 상태
+    // ── 디바이스 (CopyDescriptorsSimple 용) ──────────────────
+    ID3D12Device* m_device = nullptr;
 
     // ── 내부 헬퍼 ────────────────────────────────────────────
     void CreateBuffers(ID3D12Device* device, DescriptorHeap& heap,
                        uint32_t w, uint32_t h);
-    void CreateComputePSOs(ID3D12Device5* device,
-                           ID3D12RootSignature* globalRS);
+    void CreateComputePSOs(ID3D12Device5* device, ID3D12RootSignature* globalRS);
+
+    // 리소스 상태 전환 (상태가 동일하면 no-op)
+    void TransitionRes(ID3D12GraphicsCommandList* cmd,
+                       ID3D12Resource*            res,
+                       D3D12_RESOURCE_STATES&     curState,
+                       D3D12_RESOURCE_STATES      newState);
+
+    // G-Buffer 4개 일괄 전환
+    void TransitionGBuf(ID3D12GraphicsCommandList* cmd,
+                        D3D12_RESOURCE_STATES      newState);
+
+    // 디스크립터 복사 헬퍼
+    void CopyDesc(D3D12_CPU_DESCRIPTOR_HANDLE dst,
+                  D3D12_CPU_DESCRIPTOR_HANDLE src) const
+    {
+        m_device->CopyDescriptorsSimple(1, dst, src,
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+
     ComPtr<ID3D12Resource> CreateUAVTexture(ID3D12Device* device,
                                             DXGI_FORMAT fmt,
                                             uint32_t w, uint32_t h,

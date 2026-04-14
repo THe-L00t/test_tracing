@@ -81,24 +81,26 @@ namespace
 ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
 {
     // ── 디스크립터 테이블 레이아웃 ──────────────────────────────
-    // Range 0: UAV u0-u1  (2개,  힙 offset 0)  output + accumulation
-    // Range 1: SRV t0-t4  (5개,  힙 offset 2)  TLAS + VBs
-    // Range 2: UAV u2-u8  (7개,  힙 offset 7)  G-Buffer(4) + Reservoir(2) + MotionVec(1)
-    // Range 3: SRV t5-t12 (8개,  힙 offset 14) LightList(1) + G-Buffer SRV(4) + MotionVec SRV(1) + Reservoir SRV(2)
+    // Range 0: UAV u0-u1  (2개,  힙 offset  0) output + accumulation
+    // Range 1: SRV t0-t4  (5개,  힙 offset  2) TLAS + VBs
+    // Range 2: UAV u2-u7  (6개,  힙 offset  7) G-Buffer(4) + Reservoir cur/prev(2)
+    // Range 3: SRV t5-t10 (6개,  힙 offset 13) LightList(1) + G-Buffer SRV(4) + reservoir_in(1)
     //
     // 힙 슬롯 요약:
-    //  0: UAV u0 (g_output)        7: UAV u2 (gbuf_worldPos)   14: SRV t5 (lightList)
-    //  1: UAV u1 (g_accumulation)  8: UAV u3 (gbuf_normal)     15: SRV t6 (gbuf_worldPos)
-    //  2: SRV t0 (TLAS)            9: UAV u4 (gbuf_albedo)     16: SRV t7 (gbuf_normal)
-    //  3: SRV t1 (plane VB)       10: UAV u5 (gbuf_matInfo)    17: SRV t8 (gbuf_albedo)
-    //  4: SRV t2 (cube VB)        11: UAV u6 (reservoir_cur)   18: SRV t9 (gbuf_matInfo)
-    //  5: SRV t3 (room VB)        12: UAV u7 (reservoir_prev)  19: SRV t10(motionVec)
-    //  6: SRV t4 (sphere VB)      13: UAV u8 (motionVec)       20: SRV t11(reservoir_in)
-    //                                                           21: SRV t12(reservoir_cur SRV)
+    //  0: UAV u0 (g_output)        7: UAV u2 (gbuf_worldPos)   13: SRV t5  (lightList)
+    //  1: UAV u1 (g_accumulation)  8: UAV u3 (gbuf_normal)     14: SRV t6  (gbuf_worldPos)
+    //  2: SRV t0 (TLAS)            9: UAV u4 (gbuf_albedo)     15: SRV t7  (gbuf_normal)
+    //  3: SRV t1 (plane VB)       10: UAV u5 (gbuf_matInfo)    16: SRV t8  (gbuf_albedo)
+    //  4: SRV t2 (cube VB)        11: UAV u6 (reservoir_cur)   17: SRV t9  (gbuf_matInfo)
+    //  5: SRV t3 (room VB)        12: UAV u7 (reservoir_prev)  18: SRV t10 (reservoir_in) ← 동적
+    //  6: SRV t4 (sphere VB)
+    //
+    // 스테이징 슬롯 (19~22): CopyDescriptorsSimple 소스 (셰이더 비접근)
+    //  19: ResA_UAV  20: ResB_UAV  21: ResA_SRV  22: ResB_SRV
 
     D3D12_DESCRIPTOR_RANGE1 ranges[4]{};
 
-    // Range 0: UAV u0-u1 (기존 출력 버퍼)
+    // Range 0: UAV u0-u1 (출력 버퍼)
     ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     ranges[0].NumDescriptors                    = 2;
     ranges[0].BaseShaderRegister                = 0;
@@ -106,7 +108,7 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[0].OffsetInDescriptorsFromTableStart = 0;
     ranges[0].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
-    // Range 1: SRV t0-t4 (기존 TLAS + VBs)
+    // Range 1: SRV t0-t4 (TLAS + VBs)
     ranges[1].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     ranges[1].NumDescriptors                    = 5;
     ranges[1].BaseShaderRegister                = 0;
@@ -114,20 +116,20 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[1].OffsetInDescriptorsFromTableStart = 2;
     ranges[1].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
-    // Range 2: UAV u2-u8 (ReSTIR G-Buffer + Reservoir + MotionVec)
+    // Range 2: UAV u2-u7 (G-Buffer 4개 + Reservoir cur/prev)
     ranges[2].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    ranges[2].NumDescriptors                    = 7;
-    ranges[2].BaseShaderRegister                = 2;   // u2 시작
+    ranges[2].NumDescriptors                    = 6;    // u2~u7 (MotionVec 제거)
+    ranges[2].BaseShaderRegister                = 2;    // u2 시작
     ranges[2].RegisterSpace                     = 0;
-    ranges[2].OffsetInDescriptorsFromTableStart = 7;   // 힙 슬롯 7
+    ranges[2].OffsetInDescriptorsFromTableStart = 7;    // 힙 슬롯 7
     ranges[2].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
-    // Range 3: SRV t5-t12 (LightList + G-Buffer SRV + MotionVec SRV + Reservoir SRV)
+    // Range 3: SRV t5-t10 (LightList + G-Buffer SRV 4개 + reservoir_in)
     ranges[3].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    ranges[3].NumDescriptors                    = 8;
-    ranges[3].BaseShaderRegister                = 5;   // t5 시작
+    ranges[3].NumDescriptors                    = 6;    // t5~t10 (MotionVec SRV·t11·t12 제거)
+    ranges[3].BaseShaderRegister                = 5;    // t5 시작
     ranges[3].RegisterSpace                     = 0;
-    ranges[3].OffsetInDescriptorsFromTableStart = 14;  // 힙 슬롯 14
+    ranges[3].OffsetInDescriptorsFromTableStart = 13;   // 힙 슬롯 13
     ranges[3].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     D3D12_ROOT_PARAMETER1 params[3]{};
