@@ -175,35 +175,12 @@ void RayGen_Shade()
         {
             float vis = ShadowVis(hitPos + N * 0.001f, L, dist - 0.01f);
 
-            // ▶ 최종 직접광 공식 (Bitterli et al. 2020, Eq.(5)):
-            //   L_direct = f_r(V, L, N) · L_i(y) · NdotL · vis · R.W
-            //
-            //   R.W = wSum / (M · p̂(y_selected))   [Talbot 2005, Alg.2 line 8]
-            //     → FinalizeReservoir()가 매 패스 마지막에 갱신
-            //     → R.W는 이미 계산된 상태로 Reservoir에 저장됨
-            //
-            //   f_r(V, L, N) = GGX Cook-Torrance:
-            //     H  = normalize(V + L)
-            //     F0 = lerp(float3(0.04), albedo, metallic)
-            //     F  = SchlickF(saturate(dot(V, H)), F0)        // Schlick 근사
-            //     D  = D_GGX(NdotH, alpha2)                     // alpha = roughness²
-            //     G  = G1_Smith(NdotV, alpha2) * G1_Smith(NdotL, alpha2)
-            //     spec = (D * G * F) / (4 * NdotV * NdotL + 1e-5f)
-            //     diff = albedo * INV_PI * (1 - metallic) * (1 - F)
-            //     f_r  = spec + diff
-            //
-            //   ※ EvalDeltaLight() in feature/pbr-path-tracing/Raytracing.hlsl 가
-            //     위 계산을 이미 구현함. 해당 함수 시그니처:
-            //       float3 EvalDeltaLight(float3 N, float3 V, float3 L, float3 Li,
-            //                             float3 albedo, float metallic, float alpha2)
-            //     → alpha2 = roughness^4  (Disney α = roughness², α² = roughness⁴)
-            //
-            // GGX Cook-Torrance BRDF (Bitterli 2020 Eq.5)
             float3 V     = normalize(camPos - hitPos);
             float  alpha  = max(roughness * roughness, 0.001f);
             float  alpha2 = alpha * alpha;
             float  NdotV  = max(dot(N, V), 0.0001f);
-            float3 H      = normalize(V + L);
+            float3 VplusL = V + L;
+            float3 H      = normalize(length(VplusL) > 1e-4f ? VplusL : N);
             float  NdotH  = max(dot(N, H), 0.0001f);
             float  VdotH  = max(dot(V, H), 0.0001f);
             float3 F0     = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
@@ -248,7 +225,6 @@ void RayGen_Shade()
     // ── 합산 및 출력 ─────────────────────────────────────────
     float3 total = directLight + indirectLight;
 
-    // Reinhard + gamma
     float3 color = total / (total + 1.0f);
     color = pow(max(color, 0.0f), 1.0f / 2.2f);
     g_output[idx] = float4(color, 1.0f);
