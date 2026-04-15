@@ -99,7 +99,8 @@ private:
     // 패스 트레이싱 누적
     uint32_t m_frameCount       = 0;  // 카메라 이동 시 리셋 (Path Tracer 누적용)
     uint32_t m_shadeAccumCount  = 0;  // ReSTIR_Shade 시간적 누적용
-                                      // 씬 전환/카메라 이동: 0 리셋(alpha=1.0) / 정지: 무한 증가
+                                      // 씬 전환/카메라 이동/정지 직후 1프레임: 0 리셋(alpha=1.0)
+                                      // 정지 2프레임 이후: 무한 증가 → 깨끗한 수렴
     bool     m_cameraMoved  = true;
     bool     m_accumDirty   = true;  // 씬 전환/디노이저 토글 시 누적 버퍼 클리어 필요
 

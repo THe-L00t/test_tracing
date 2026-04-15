@@ -815,13 +815,15 @@ void App::OnRender()
         m_frameCount  = 0;
         m_accumDirty  = true;   // g_accumulation 클리어 + m_shadeAccumCount 리셋
                                 // (이동 중 old_accum * 0.8^N → 0 암전 현상 방지)
-                                // frameIndex==0 temporal skip으로 Reservoir 품질 확보됐으므로
-                                // 1spp 번쩍임 우려 해소
         m_cameraMoved = false;
     }
     else
     {
         m_frameCount++;
+        // 정지 직후 첫 프레임(frameIndex==1): 이전 이동 프레임의 stale g_accumulation을
+        // 그대로 lerp하면 검은화면이 될 수 있으므로 한 프레임 더 클리어
+        if (m_frameCount == 1)
+            m_accumDirty = true;
     }
 
     // ReSTIR_Shade 전용 누적 카운터:
