@@ -813,12 +813,10 @@ void App::OnRender()
     if (m_cameraMoved)
     {
         m_frameCount  = 0;
-        // ReSTIR 누적 카운터를 3으로 클램프:
-        //   0 리셋(alpha=1.0) → 1spp 번쩍임 재발
-        //   그대로 유지(alpha≈3%) → 이미지 이전 위치에 고착
-        //   3 클램프(alpha=20%) → 15~20프레임 내 갱신, 번쩍임 없음
-        if (m_shadeAccumCount > 3u)
-            m_shadeAccumCount = 3u;
+        m_accumDirty  = true;   // g_accumulation 클리어 + m_shadeAccumCount 리셋
+                                // (이동 중 old_accum * 0.8^N → 0 암전 현상 방지)
+                                // frameIndex==0 temporal skip으로 Reservoir 품질 확보됐으므로
+                                // 1spp 번쩍임 우려 해소
         m_cameraMoved = false;
     }
     else
@@ -827,8 +825,8 @@ void App::OnRender()
     }
 
     // ReSTIR_Shade 전용 누적 카운터:
-    //   m_accumDirty(씬 전환/토글) 시 0 리셋 → g_accumulation 클리어와 동기
-    //   카메라 이동 시 위에서 3으로 클램프 → 번쩍임 없이 빠른 갱신
+    //   m_accumDirty(씬 전환/토글/카메라 이동) 시 0 리셋 → alpha=1.0 → 1spp 직접 출력
+    //   정지: 무한 증가 → alpha 계속 감소 → 깨끗한 수렴
     if (m_accumDirty)
         m_shadeAccumCount = 0;
     else
