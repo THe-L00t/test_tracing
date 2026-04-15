@@ -110,6 +110,19 @@ void CS_Temporal(uint3 tid : SV_DispatchThreadID)
 
     Reservoir R_cur = reservoir_cur[pidx];
 
+    // ── frameIndex == 0: 시간적 재사용 스킵 ──────────────────────
+    // ReSTIR 활성화 직후 또는 카메라 이동 직후에 해당.
+    // reservoir_prev에 이전 세션의 구 데이터가 잔존할 수 있으므로
+    // Merge 없이 Initial RIS 결과만 확정하고 반환.
+    // (흰 픽셀 스파이크 → 검은 픽셀 연속 현상의 근본 원인 차단)
+    if (frameIndex == 0u)
+    {
+        if (R_cur.lightIdx != 0xFFFFFFFFu)
+            FinalizeReservoir(R_cur, EvalTargetPDF(hitPos, N, g_lightList[R_cur.lightIdx]));
+        reservoir_cur[pidx] = R_cur;
+        return;
+    }
+
     // ── 이전 프레임 재투영 + 병합 ───────────────────────────────
     int2 prevPx;
     if (Reproject(px, depth, N, prevPx))
