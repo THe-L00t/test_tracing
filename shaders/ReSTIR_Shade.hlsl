@@ -423,11 +423,10 @@ void RayGen_Shade()
     // ── 시간적 누적 → Reinhard 톤매핑 → gamma 보정 ───────────────
     // randomSeed = App::m_shadeAccumCount
     //   0 : 씬 전환 직후 (g_accumulation 클리어됨) → 전체 교체
-    //   N : 카메라 이동 포함 누적 N 프레임 → 부드러운 블렌딩
-    //   최대 32프레임 캡 → 카메라 정지 후 32프레임 내 재수렴 보장
+    //   N : 누적 N 프레임 → alpha = 1/(N+1) → 무한 수렴
+    //   카메라 이동 시 App 측에서 3으로 클램프 → alpha≈20% → 15~20프레임 내 갱신
     float3 total = directLight + indirectLight;
-    uint   ac    = min(randomSeed, 32u);
-    float  alpha = (randomSeed == 0u) ? 1.0f : (1.0f / float(ac + 1u));
+    float  alpha = (randomSeed == 0u) ? 1.0f : (1.0f / float(randomSeed + 1u));
     float3 accumulated = lerp(g_accumulation[idx].rgb, total, alpha);
     g_accumulation[idx] = float4(accumulated, 1.0f);
 
