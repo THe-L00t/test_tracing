@@ -884,6 +884,10 @@ void App::OnRender()
 
         m_renderTarget.UAVBarriers(cmd);
 
+        // 현재 G-Buffer → prev 복사 (다음 프레임 Temporal surface validation용)
+        // G-Buffer가 이 시점에 SRV 상태이므로 안전하게 복사 가능
+        m_restir.CopyGBufferToPrev(cmd);
+
         // 다음 프레임을 위해 이전 카메라 저장 및 Reservoir 교환
         m_prevCamera = m_camera;
         m_restir.SwapReservoirs();

@@ -25,13 +25,16 @@
 #include "Common_ReSTIR.hlsli"
 
 // ── 리소스 ──────────────────────────────────────────────────────
-Texture2D<float4>              gbuf_worldPos  : register(t6);
-Texture2D<float4>              gbuf_normal    : register(t7);
-Texture2D<float4>              gbuf_albedo    : register(t8);
-Texture2D<float4>              gbuf_matInfo   : register(t9);
-StructuredBuffer<LightData>    g_lightList    : register(t5);
-RWStructuredBuffer<Reservoir>  reservoir_cur  : register(u6);
-RWStructuredBuffer<Reservoir>  reservoir_prev : register(u7);
+Texture2D<float4>              gbuf_worldPos      : register(t6);
+Texture2D<float4>              gbuf_normal        : register(t7);
+Texture2D<float4>              gbuf_albedo        : register(t8);
+Texture2D<float4>              gbuf_matInfo       : register(t9);
+StructuredBuffer<LightData>    g_lightList        : register(t5);
+RWStructuredBuffer<Reservoir>  reservoir_cur      : register(u6);
+RWStructuredBuffer<Reservoir>  reservoir_prev     : register(u7);
+// 이전 프레임 G-Buffer: surface validation 에 사용 (CopyGBufferToPrev 로 매 프레임 복사)
+Texture2D<float4>              prev_gbuf_worldPos : register(t11);
+Texture2D<float4>              prev_gbuf_normal   : register(t12);
 
 cbuffer SceneConstants  : register(b0) { float3 camPos; uint sceneID; float4 _sc[15]; }
 cbuffer ReSTIRConstants : register(b1)
@@ -80,9 +83,12 @@ bool Reproject(uint2 px, float curDepth, float3 curN,
 
     if (!IsValidPixel(prevPx, screenW, screenH)) return false;
 
-    // 표면 연속성 검사: 깊이·법선 유사도
-    float  prevDepth = gbuf_matInfo[uint2(prevPx)].g;
-    float3 prevN     = gbuf_normal[uint2(prevPx)].xyz;
+    // 표면 연속성 검사: 이전 프레임 G-Buffer에서 prevPx 위치의 깊이·법선 읽기
+    // (Bitterli 2020 Sec.4.3: 이전 프레임 G-Buffer 사용이 논문 정석)
+    float3 prevWPos  = prev_gbuf_worldPos[uint2(prevPx)].xyz;
+    float3 prevN     = prev_gbuf_normal[uint2(prevPx)].xyz;
+    // 깊이 비교: 이전 프레임 월드 위치를 현재 카메라 forward로 투영해 선형 깊이 재계산
+    float  prevDepth = dot(prevWPos - _prevCam[0].xyz, _prevCam[3].xyz);
 
     bool depthOk  = abs(prevDepth - curDepth) / max(curDepth, 1e-4f) < k_depthThreshold;
     bool normalOk = dot(prevN, curN) > k_normalThreshold;

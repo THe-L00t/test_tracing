@@ -177,25 +177,26 @@ float EvalTargetPDF(float3 hitPos, float3 N,
 //             ─────────────────────────
 //             |cosθ_p| · dist(x_q, y)²
 //
-// ▶ Point light (lightNormal = float3(0,0,0)):
-//   cosine term이 분자/분모에서 상쇄 → J = dist²_p / dist²_q
+// ▶ Point / Directional light (lightNormal = float3(0,0,0)):
+//   델타 분포 광원이므로 면적 측도 변환 불필요 → J = 1.0
+//   (EvalTargetPDF 내부에서 이미 1/dist² 감쇠가 적용됨)
 //
 // ▶ Area light (lightNormal != 0):
 //   면 법선 기준 cosine 비율 포함
 float CalcJacobian(float3 hitPos_p, float3 hitPos_q,
                    float3 lightPos,  float3 lightNormal)
 {
+    // Point / Directional: 델타 분포 → Jacobian = 1
+    if (dot(lightNormal, lightNormal) < 1e-6f)
+        return 1.0f;
+
+    // Area light: 면적 측도 → 입체각 측도 변환
     float3 dir_p = hitPos_p - lightPos;
     float3 dir_q = hitPos_q - lightPos;
 
     float distP2 = max(dot(dir_p, dir_p), 1e-8f);
     float distQ2 = max(dot(dir_q, dir_q), 1e-8f);
 
-    // Point light: lightNormal 크기가 0에 가까우면 cosine 항 상쇄
-    if (dot(lightNormal, lightNormal) < 1e-6f)
-        return clamp(distP2 / distQ2, 0.0f, 10.0f);
-
-    // Area light: 면 법선 기준 cosine 비율
     float3 dirPN = normalize(dir_p);
     float3 dirQN = normalize(dir_q);
     float  cosP  = abs(dot(lightNormal, dirPN));

@@ -124,9 +124,9 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[2].OffsetInDescriptorsFromTableStart = 7;    // 힙 슬롯 7
     ranges[2].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
-    // Range 3: SRV t5-t10 (LightList + G-Buffer SRV 4개 + reservoir_in)
+    // Range 3: SRV t5-t12 (LightList + G-Buffer SRV 4개 + reservoir_in + prev G-Buffer 2개)
     ranges[3].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    ranges[3].NumDescriptors                    = 6;    // t5~t10 (MotionVec SRV·t11·t12 제거)
+    ranges[3].NumDescriptors                    = 8;    // t5~t12
     ranges[3].BaseShaderRegister                = 5;    // t5 시작
     ranges[3].RegisterSpace                     = 0;
     ranges[3].OffsetInDescriptorsFromTableStart = 13;   // 힙 슬롯 13

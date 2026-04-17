@@ -87,8 +87,12 @@ public:
     // 씬 전환 시 G-Buffer 클리어 (hitDist=-1로 배경 마킹)
     void ClearGBuffer(ID3D12GraphicsCommandList* cmdList);
 
+    // Shade 완료 후 호출: 현재 G-Buffer(worldPos, normal)를 prev로 복사
+    // Temporal 패스가 다음 프레임에 이전 프레임 표면 정보를 읽기 위해 필요
+    void CopyGBufferToPrev(ID3D12GraphicsCommandList* cmdList);
+
 private:
-    // ── G-Buffer 텍스처 ──────────────────────────────────────
+    // ── G-Buffer 텍스처 (현재 프레임) ────────────────────────
     ComPtr<ID3D12Resource> m_gbWorldPos;
     ComPtr<ID3D12Resource> m_gbNormal;
     ComPtr<ID3D12Resource> m_gbAlbedo;
@@ -96,6 +100,15 @@ private:
 
     DescriptorHandle m_gbWorldPosUAV, m_gbNormalUAV, m_gbAlbedoUAV, m_gbMatInfoUAV;
     DescriptorHandle m_gbWorldPosSRV, m_gbNormalSRV, m_gbAlbedoSRV, m_gbMatInfoSRV;
+
+    // ── 이전 프레임 G-Buffer (Temporal surface validation용) ─
+    // 슬롯 19: SRV t11 – prev_gbuf_worldPos
+    // 슬롯 20: SRV t12 – prev_gbuf_normal
+    ComPtr<ID3D12Resource> m_prevGBWorldPos;
+    ComPtr<ID3D12Resource> m_prevGBNormal;
+    DescriptorHandle       m_prevGBWorldPosSRV;
+    DescriptorHandle       m_prevGBNormalSRV;
+    D3D12_RESOURCE_STATES  m_prevGBState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
     // ── Reservoir 버퍼 (double-buffered, A/B) ───────────────
     ComPtr<ID3D12Resource> m_reservoirA;

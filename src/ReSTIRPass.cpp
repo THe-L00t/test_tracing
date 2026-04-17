@@ -153,11 +153,17 @@ void ReSTIRPass::CreateBuffers(ID3D12Device* device,
 {
     uint32_t pixCount = w * h;
 
-    // ── G-Buffer 텍스처 ─────────────────────────────────────
+    // ── G-Buffer 텍스처 (현재 프레임) ──────────────────────
     m_gbWorldPos = CreateUAVTexture(device, DXGI_FORMAT_R32G32B32A32_FLOAT, w, h, L"GB_WorldPos");
     m_gbNormal   = CreateUAVTexture(device, DXGI_FORMAT_R32G32B32A32_FLOAT, w, h, L"GB_Normal");
     m_gbAlbedo   = CreateUAVTexture(device, DXGI_FORMAT_R8G8B8A8_UNORM,     w, h, L"GB_Albedo");
     m_gbMatInfo  = CreateUAVTexture(device, DXGI_FORMAT_R32G32B32A32_FLOAT, w, h, L"GB_MatInfo");
+
+    // ── 이전 프레임 G-Buffer (Temporal surface validation용) ─
+    // UAV 플래그 불필요: COPY_DEST + SRV 용도만. CreateUAVTexture 재사용 (플래그 있어도 무방)
+    m_prevGBWorldPos = CreateUAVTexture(device, DXGI_FORMAT_R32G32B32A32_FLOAT, w, h, L"PrevGB_WorldPos");
+    m_prevGBNormal   = CreateUAVTexture(device, DXGI_FORMAT_R32G32B32A32_FLOAT, w, h, L"PrevGB_Normal");
+    m_prevGBState    = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
     // ── Reservoir 버퍼 (double-buffered, sizeof(Reservoir)=16) ─
     constexpr uint32_t kReservoirStride = 16u;
@@ -251,7 +257,12 @@ void ReSTIRPass::CreateBuffers(ID3D12Device* device,
     // 슬롯 18: SRV t10 – reservoir_in (초기: A_SRV, CopyDescriptor로 동적)
     auto resA_SRV_handle = MakeSRV_Buf(m_reservoirA, kReservoirStride, pixCount);
 
-    // 슬롯 19-22: 스테이징 (셰이더 비접근, CopyDescriptor 소스)
+    // 슬롯 19: SRV t11 – prev_gbuf_worldPos (이전 프레임 G-Buffer, Temporal용)
+    m_prevGBWorldPosSRV = MakeSRV_Tex(m_prevGBWorldPos, DXGI_FORMAT_R32G32B32A32_FLOAT);
+    // 슬롯 20: SRV t12 – prev_gbuf_normal
+    m_prevGBNormalSRV   = MakeSRV_Tex(m_prevGBNormal,   DXGI_FORMAT_R32G32B32A32_FLOAT);
+
+    // 슬롯 21-24: 스테이징 (셰이더 비접근, CopyDescriptor 소스)
     auto stageA_UAV = MakeUAV_Buf(m_reservoirA, kReservoirStride, pixCount);
     auto stageB_UAV = MakeUAV_Buf(m_reservoirB, kReservoirStride, pixCount);
     auto stageA_SRV = MakeSRV_Buf(m_reservoirA, kReservoirStride, pixCount);
@@ -569,12 +580,71 @@ void ReSTIRPass::Shutdown()
 {
     m_gbWorldPos = nullptr; m_gbNormal   = nullptr;
     m_gbAlbedo   = nullptr; m_gbMatInfo  = nullptr;
+    m_prevGBWorldPos = nullptr; m_prevGBNormal = nullptr;
     m_reservoirA = nullptr; m_reservoirB = nullptr;
     m_lightListBuf = nullptr; m_lightListUpload = nullptr;
     m_restirCB   = nullptr;
     m_psoInitial = nullptr; m_psoTemporal = nullptr;
     m_psoSpatial = nullptr;
     m_device     = nullptr;
+}
+
+// ──────────────────────────────────────────────────────────────
+//  CopyGBufferToPrev  – 현재 G-Buffer(worldPos, normal)를 prev로 복사
+//
+//  호출 시점: DispatchShade 완료 후, SwapReservoirs 전
+//  진입: G-Buffer = SRV (NON_PIXEL_SHADER_RESOURCE)
+//  퇴장: prev G-Buffer = SRV, 현재 G-Buffer 전체 = UAV (다음 프레임 GBuffer 준비)
+// ──────────────────────────────────────────────────────────────
+void ReSTIRPass::CopyGBufferToPrev(ID3D12GraphicsCommandList* cmd)
+{
+    // worldPos, normal: SRV → COPY_SOURCE
+    // prev worldPos, normal: 현재 상태 → COPY_DEST
+    D3D12_RESOURCE_BARRIER barriers[4]{};
+    barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers[0].Transition = { m_gbWorldPos.Get(),     D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                m_gbufState,            D3D12_RESOURCE_STATE_COPY_SOURCE };
+    barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers[1].Transition = { m_gbNormal.Get(),       D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                m_gbufState,            D3D12_RESOURCE_STATE_COPY_SOURCE };
+    barriers[2].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers[2].Transition = { m_prevGBWorldPos.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                m_prevGBState,          D3D12_RESOURCE_STATE_COPY_DEST };
+    barriers[3].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers[3].Transition = { m_prevGBNormal.Get(),   D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                m_prevGBState,          D3D12_RESOURCE_STATE_COPY_DEST };
+    cmd->ResourceBarrier(4, barriers);
+
+    cmd->CopyResource(m_prevGBWorldPos.Get(), m_gbWorldPos.Get());
+    cmd->CopyResource(m_prevGBNormal.Get(),   m_gbNormal.Get());
+
+    // prev: COPY_DEST → SRV (다음 프레임 Temporal이 t11/t12로 읽음)
+    // G-Buffer 전체: COPY_SOURCE/SRV → UAV (다음 프레임 GBuffer 쓰기 준비)
+    D3D12_RESOURCE_BARRIER barriers2[6]{};
+    barriers2[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers2[0].Transition = { m_prevGBWorldPos.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                 D3D12_RESOURCE_STATE_COPY_DEST,   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+    barriers2[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers2[1].Transition = { m_prevGBNormal.Get(),   D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                 D3D12_RESOURCE_STATE_COPY_DEST,   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+    // worldPos, normal: COPY_SOURCE → UAV
+    barriers2[2].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers2[2].Transition = { m_gbWorldPos.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                 D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
+    barriers2[3].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers2[3].Transition = { m_gbNormal.Get(),   D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                 D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
+    // albedo, matInfo: 기존 SRV → UAV
+    barriers2[4].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers2[4].Transition = { m_gbAlbedo.Get(),  D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                 m_gbufState,       D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
+    barriers2[5].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers2[5].Transition = { m_gbMatInfo.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                 m_gbufState,       D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
+    cmd->ResourceBarrier(6, barriers2);
+
+    m_prevGBState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    m_gbufState   = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 }
 
 // ──────────────────────────────────────────────────────────────
