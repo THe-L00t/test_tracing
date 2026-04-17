@@ -4,7 +4,24 @@
       "Bash(gh auth:*)",
       "Bash(export PATH=\"$PATH:/c/Program Files/GitHub CLI\")",
       "Bash(gh repo:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(python -c ':*)",
+      "Bash(grep -n \"DescriptorRange\\\\|RootParameter\\\\|CreateRootSignature\\\\|globalRS\\\\|D3D12_DESCRIPTOR_RANGE\" src/*.cpp src/*.h)",
+      "Bash(grep -n \"EvalTargetPDF\" shaders/*.hlsl shaders/*.hlsli)",
+      "WebFetch(domain:gamehacker1999.github.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:intro-to-restir.cwyman.org)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:interplayoflight.wordpress.com)",
+      "mcp__claude_ai_Notion__notion-search",
+      "mcp__claude_ai_Notion__notion-fetch",
+      "mcp__claude_ai_Notion__notion-create-pages",
+      "WebFetch(domain:benedikt-bitterli.me)",
+      "WebFetch(domain:meganr28.github.io)",
+      "WebFetch(domain:cs.dartmouth.edu)",
+      "WebFetch(domain:research.nvidia.com)",
+      "mcp__claude_ai_Notion__notion-update-page"
     ]
   }
 }
