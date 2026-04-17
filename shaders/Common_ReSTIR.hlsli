@@ -341,3 +341,90 @@ float3 SampleBRDF(float3 N, float3 V,
     attenuation   = fNdotL / pdf;
     return scatterDir;
 }
+
+// ── GI Reservoir (ReSTIR GI, Ouyang et al. 2021) ─────────────
+// 첫 번째 간접 바운스 히트 포인트 x_s와 해당 방향의 누적 Radiance 저장.
+// 시간적·공간적 재사용으로 1spp 간접광 분산을 획기적으로 감소.
+//
+// 레지스터: u8 = gi_reservoir_cur, u9 = gi_reservoir_prev, t13 = gi_reservoir_in
+// 크기: 64 bytes (16byte 정렬)
+struct GIReservoir
+{
+    float3 samplePos;    // x_s: 첫 번째 간접 히트 위치       (12)
+    uint   valid;        // 1 = 유효한 샘플                   ( 4)
+    float3 sampleNormal; // x_s 표면 법선 (Jacobian 보정용)   (12)
+    float  wSum;         // 누적 가중치                       ( 4)
+    float3 radiance;     // x_s 방향의 누적 incoming radiance (12)
+    float  W;            // 비편향 기여 가중치                 ( 4)
+    uint   M;            // 후보 수                           ( 4)
+    uint   _pad0;        //                                   ( 4)
+    float2 _pad1;        //                                   ( 8)
+    // Total: 64 bytes
+};
+
+GIReservoir MakeEmptyGIReservoir()
+{
+    GIReservoir r;
+    r.samplePos    = float3(0.0f, 0.0f, 0.0f);
+    r.valid        = 0u;
+    r.sampleNormal = float3(0.0f, 1.0f, 0.0f);
+    r.wSum         = 0.0f;
+    r.radiance     = float3(0.0f, 0.0f, 0.0f);
+    r.W            = 0.0f;
+    r.M            = 0u;
+    r._pad0        = 0u;
+    r._pad1        = float2(0.0f, 0.0f);
+    return r;
+}
+
+// p̂(x_s) = luma(radiance) — BRDF 미포함 (GGX wSum→0 방지, DI와 동일 전략)
+float EvalGITargetPDF(float3 radiance)
+{
+    return max(dot(radiance, float3(0.2126f, 0.7152f, 0.0722f)), 0.0f);
+}
+
+void UpdateGIReservoir(inout GIReservoir r, GIReservoir cand, float w, inout uint seed)
+{
+    r.wSum += w;
+    r.M    += 1u;
+    if (RandFloat(seed) < w / max(r.wSum, 1e-8f))
+    {
+        r.samplePos    = cand.samplePos;
+        r.sampleNormal = cand.sampleNormal;
+        r.radiance     = cand.radiance;
+        r.valid        = cand.valid;
+    }
+}
+
+void MergeGIReservoir(inout GIReservoir r_a, GIReservoir r_b,
+                      float pHat_b, inout uint seed)
+{
+    float w_b  = pHat_b * r_b.W * float(max(r_b.M, 1u));
+    uint  Msum = r_a.M + r_b.M;
+    UpdateGIReservoir(r_a, r_b, w_b, seed);
+    r_a.M = Msum;
+}
+
+void FinalizeGIReservoir(inout GIReservoir r, float pHat_selected)
+{
+    r.W = (pHat_selected > 0.0f && r.M > 0u)
+        ? r.wSum / (float(r.M) * pHat_selected)
+        : 0.0f;
+}
+
+// GI 공간 재사용 Jacobian (Ouyang 2021, Eq.1)
+// 이웃 픽셀 q의 x_s를 픽셀 p에서 재사용할 때 입체각 보정
+//   J(q→p) = |cosθ_q| · dist(x_p, x_s)²
+//             ─────────────────────────────
+//             |cosθ_p| · dist(x_q, x_s)²
+// θ: x_s 법선과 x_v 방향 사이의 각도
+float CalcGIJacobian(float3 xp, float3 xq, float3 xs, float3 xsNormal)
+{
+    float3 dq = xq - xs;
+    float3 dp = xp - xs;
+    float  dq2 = max(dot(dq, dq), 1e-8f);
+    float  dp2 = max(dot(dp, dp), 1e-8f);
+    float  cosQ = abs(dot(normalize(dq), xsNormal));
+    float  cosP = abs(dot(normalize(dp), xsNormal));
+    return clamp((cosQ * dp2) / max(cosP * dq2, 1e-8f), 0.0f, 10.0f);
+}

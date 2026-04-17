@@ -71,13 +71,26 @@ public:
     void DispatchSpatial(ID3D12GraphicsCommandList* cmdList,
                          uint32_t width, uint32_t height);
 
+    // GI 패스
+    void DispatchGI_Initial(ID3D12GraphicsCommandList4* cmdList,
+                             ID3D12StateObject*          giInitialPSO,
+                             const ShaderTable&          shaderTable,
+                             uint32_t width, uint32_t height);
+
+    void DispatchGI_Temporal(ID3D12GraphicsCommandList* cmdList,
+                              uint32_t width, uint32_t height);
+
+    void DispatchGI_Spatial(ID3D12GraphicsCommandList* cmdList,
+                             uint32_t width, uint32_t height);
+
     void DispatchShade(ID3D12GraphicsCommandList4* cmdList,
                        ID3D12StateObject*          shadePSO,
                        const ShaderTable&          shaderTable,
                        uint32_t width, uint32_t height);
 
-    // 프레임 마지막: cur/prev 포인터 교환 + 힙 슬롯 갱신
+    // 프레임 마지막: DI/GI cur/prev 포인터 교환
     void SwapReservoirs();
+    void SwapGIReservoirs();
 
     D3D12_GPU_VIRTUAL_ADDRESS RestirCBAddress() const noexcept
     {
@@ -128,24 +141,44 @@ private:
     ComPtr<ID3D12PipelineState> m_psoInitial;
     ComPtr<ID3D12PipelineState> m_psoTemporal;
     ComPtr<ID3D12PipelineState> m_psoSpatial;
+    ComPtr<ID3D12PipelineState> m_psoGITemporal;
+    ComPtr<ID3D12PipelineState> m_psoGISpatial;
+
+    // ── GI Reservoir 버퍼 (double-buffered) ─────────────────
+    // 슬롯 25: UAV u8 – gi_reservoir_cur
+    // 슬롯 26: UAV u9 – gi_reservoir_prev
+    // 슬롯 27: SRV t13– gi_reservoir_in (Shade용)
+    // 슬롯 28-31: GI 스테이징
+    ComPtr<ID3D12Resource> m_giReservoirA;
+    ComPtr<ID3D12Resource> m_giReservoirB;
+    bool m_giCurIsA = true;
+
+    D3D12_RESOURCE_STATES m_giResAState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    D3D12_RESOURCE_STATES m_giResBState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot25_cpu{};  // gi_reservoir_cur  UAV (u8)
+    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot26_cpu{};  // gi_reservoir_prev UAV (u9)
+    D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot27_cpu{};  // gi_reservoir_in   SRV (t13)
+
+    D3D12_CPU_DESCRIPTOR_HANDLE m_stageGIResA_UAV{};
+    D3D12_CPU_DESCRIPTOR_HANDLE m_stageGIResB_UAV{};
+    D3D12_CPU_DESCRIPTOR_HANDLE m_stageGIResA_SRV{};
+    D3D12_CPU_DESCRIPTOR_HANDLE m_stageGIResB_SRV{};
 
     uint32_t m_width  = 0;
     uint32_t m_height = 0;
 
     // ── 리소스 상태 추적 ────────────────────────────────────
-    // 각 패스 함수가 진입/퇴장 시 갱신. TransitionRes()가 barrier 발행 여부 판단.
     D3D12_RESOURCE_STATES m_gbufState      = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES m_resAState      = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES m_resBState      = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES m_lightListState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
     // ── 디스크립터 동적 갱신용 ──────────────────────────────
-    // 힙 슬롯 11(u6), 12(u7), 18(t10) 의 CPU 핸들
     D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot11_cpu{};  // reservoir_cur  UAV
     D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot12_cpu{};  // reservoir_prev UAV
     D3D12_CPU_DESCRIPTOR_HANDLE m_heapSlot18_cpu{};  // reservoir_in   SRV
 
-    // 스테이징 소스 핸들 (CopyDescriptorsSimple 소스)
     D3D12_CPU_DESCRIPTOR_HANDLE m_stageResA_UAV{};
     D3D12_CPU_DESCRIPTOR_HANDLE m_stageResB_UAV{};
     D3D12_CPU_DESCRIPTOR_HANDLE m_stageResA_SRV{};

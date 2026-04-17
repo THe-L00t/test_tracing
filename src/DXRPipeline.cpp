@@ -98,7 +98,7 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     // 스테이징 슬롯 (19~22): CopyDescriptorsSimple 소스 (셰이더 비접근)
     //  19: ResA_UAV  20: ResB_UAV  21: ResA_SRV  22: ResB_SRV
 
-    D3D12_DESCRIPTOR_RANGE1 ranges[4]{};
+    D3D12_DESCRIPTOR_RANGE1 ranges[6]{};
 
     // Range 0: UAV u0-u1 (출력 버퍼)
     ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
@@ -132,11 +132,27 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[3].OffsetInDescriptorsFromTableStart = 13;   // 힙 슬롯 13
     ranges[3].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
+    // Range 4: UAV u8-u9 (GI Reservoir cur/prev)
+    ranges[4].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    ranges[4].NumDescriptors                    = 2;    // u8~u9
+    ranges[4].BaseShaderRegister                = 8;    // u8 시작
+    ranges[4].RegisterSpace                     = 0;
+    ranges[4].OffsetInDescriptorsFromTableStart = 25;   // 힙 슬롯 25
+    ranges[4].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
+
+    // Range 5: SRV t13 (GI reservoir_in, Shade용)
+    ranges[5].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    ranges[5].NumDescriptors                    = 1;    // t13
+    ranges[5].BaseShaderRegister                = 13;   // t13 시작
+    ranges[5].RegisterSpace                     = 0;
+    ranges[5].OffsetInDescriptorsFromTableStart = 27;   // 힙 슬롯 27
+    ranges[5].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
+
     D3D12_ROOT_PARAMETER1 params[3]{};
 
     // 파라미터 0: 디스크립터 테이블 (4 ranges)
     params[0].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[0].DescriptorTable.NumDescriptorRanges = 4;
+    params[0].DescriptorTable.NumDescriptorRanges = 6;
     params[0].DescriptorTable.pDescriptorRanges   = ranges;
     params[0].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 

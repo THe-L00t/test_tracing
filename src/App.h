@@ -30,6 +30,7 @@ private:
     void SwitchScene(uint32_t id);
     void BuildGBufferPSO();
     void BuildShadePSO();
+    void BuildGIInitialPSO();
 
     // ReSTIR 헬퍼
     void UpdateReSTIRCB();
@@ -82,14 +83,16 @@ private:
     // ── ReSTIR ────────────────────────────────────────────────
     ReSTIRPass m_restir;
 
-    // GBuffer + Final Shade 용 별도 DXR PSO
-    // (기존 m_pipeline은 classic PT 유지)
-    ComPtr<ID3D12StateObject>           m_gbufferPSO;   // GBuffer.hlsl
+    // GBuffer / GI Initial / Shade DXR PSO
+    ComPtr<ID3D12StateObject>           m_gbufferPSO;
     ComPtr<ID3D12StateObjectProperties> m_gbufferPSOProps;
-    ComPtr<ID3D12StateObject>           m_shadePSO;     // ReSTIR_Shade.hlsl
+    ComPtr<ID3D12StateObject>           m_shadePSO;
     ComPtr<ID3D12StateObjectProperties> m_shadePSOProps;
+    ComPtr<ID3D12StateObject>           m_giInitialPSO;  // ReSTIR_GI_Initial.hlsl
+    ComPtr<ID3D12StateObjectProperties> m_giInitialPSOProps;
     ShaderTable                         m_gbufferShaderTable;
     ShaderTable                         m_shadeShaderTable;
+    ShaderTable                         m_giInitialShaderTable;
 
     // ReSTIR 이전 프레임 카메라 (재투영용)
     Camera   m_prevCamera;

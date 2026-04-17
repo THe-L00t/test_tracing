@@ -1,13 +1,13 @@
 // ──────────────────────────────────────────────────────────────
 //  ReSTIR_Shade.hlsl  –  [Pass 5] Final Shading
 //
-//  역할: Reservoir의 최종 선택 광원으로 shadow ray를 쏘고
-//        직접광을 계산한 뒤, 1-bounce 간접광을 BRDF 샘플링으로 합산.
+//  역할: DI Reservoir의 선택 광원으로 shadow ray를 쏘고 직접광을 계산.
+//        GI Reservoir의 x_s까지 visibility ray 1개로 간접광을 계산.
 //
 //  렌더링 방정식:
-//    L_total = L_direct(ReSTIR, Eq.5) + L_indirect(1-bounce Path Tracer)
-//    L_direct = f_r(V,L,N) * Li * NdotL * vis * R.W
-//    L_indirect = SampleBRDF(N,V) → TraceRay → radiance at bounce
+//    L_total = L_direct(ReSTIR DI) + L_indirect(ReSTIR GI)
+//    L_direct  = f_r(V,L,N) * Li * NdotL * vis * R_di.W
+//    L_indirect = f_r(V, x_s, N) * L_incoming(x_s) * vis(x_v, x_s) * R_gi.W
 //
 //  픽셀 분류:
 //    1. 배경 (hitDist < 0)         → sky gradient
@@ -35,8 +35,9 @@ Texture2D<float4>              gbuf_worldPos  : register(t6);
 Texture2D<float4>              gbuf_normal    : register(t7);
 Texture2D<float4>              gbuf_albedo    : register(t8);
 Texture2D<float4>              gbuf_matInfo   : register(t9);
-StructuredBuffer<Reservoir>    reservoir_in   : register(t10);  // Spatial 최종 결과 SRV
-StructuredBuffer<LightData>    g_lightList    : register(t5);
+StructuredBuffer<Reservoir>    reservoir_in    : register(t10);  // DI Spatial 최종 결과 SRV
+StructuredBuffer<GIReservoir>  gi_reservoir_in : register(t13);  // GI Spatial 최종 결과 SRV
+StructuredBuffer<LightData>    g_lightList     : register(t5);
 
 RaytracingAccelerationStructure g_tlas        : register(t0);
 
@@ -342,20 +343,13 @@ void RayGen_Shade()
         }
     }
 
-    // ── 간접광: 7-bounce Path Tracer (DI + 통합) ──────────────────
-    // 직접광(ReSTIR DI)은 1차 히트만, 2차 이후는 표준 경로 추적.
-    // 유리 1차 히트도 동일 루프에서 처리 (directLight=0, throughput=albedo).
-    static const uint k_maxIndirect = 7u;
-
+    // ── 간접광: ReSTIR GI Reservoir 연결 레이 ─────────────────────
+    // GI Reservoir의 x_s까지 가시성 레이 1개 발사.
+    // directLight=0인 유리 픽셀은 별도 refraction 처리.
     uint   seed      = WangHash(pidx ^ (frameIndex * 0x9E3779B9u) ^ (frameCount * 0x517CC1B7u));
-    float3 throughput    = float3(1.0f, 1.0f, 1.0f);
     float3 indirectLight = float3(0.0f, 0.0f, 0.0f);
-    bool   hasFirstRay   = false;
-    RayDesc ir;
-    ir.TMin = 0.001f;
-    ir.TMax = 1e6f;
 
-    if (flags > 0.5f && flags < 1.5f)  // GB_FLAG_GLASS: 굴절/반사가 첫 bounce
+    if (flags > 0.5f && flags < 1.5f)  // GB_FLAG_GLASS: 굴절/반사 경로 추적
     {
         float  ior  = 1.5f;
         float3 inc  = -V;
@@ -365,60 +359,48 @@ void RayGen_Shade()
         float3 refr = refract(inc, N, 1.0f / ior);
         bool   tir  = dot(refr, refr) < 0.0001f;
         float3 sdir = (tir || RandFloat(seed) < fres) ? reflect(inc, N) : refr;
+
+        RayDesc ir;
         ir.Origin    = hitPos + sdir * 0.002f;
         ir.Direction = sdir;
-        throughput   = albedo;
-        hasFirstRay  = true;
-    }
-    else if (flags < 0.5f)  // GB_FLAG_NORMAL: BRDF 샘플링이 첫 bounce
-    {
-        float3 initAtten;
-        float  initPdf;
-        float3 initDir = SampleBRDF(N, V, albedo, metallic, roughness,
-                                    seed, initAtten, initPdf);
-        if (dot(initDir, N) > 0.0f)
-        {
-            ir.Origin    = hitPos + N * 0.001f;
-            ir.Direction = initDir;
-            throughput   = initAtten;
-            hasFirstRay  = true;
-        }
-    }
+        ir.TMin      = 0.001f;
+        ir.TMax      = 1e6f;
 
-    if (hasFirstRay)
-    {
-        for (uint b = 0u; b < k_maxIndirect; b++)
+        float3 throughput = albedo;
+        for (uint b = 0u; b < 4u; b++)
         {
             IndirectPayload ip = (IndirectPayload)0;
             ip.seed = seed;
             TraceRay(g_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ir, ip);
-
             seed = ip.seed;
             indirectLight += throughput * ip.emission;
-
             if (ip.terminated != 0u) break;
-
             throughput *= ip.attenuation;
-
-            // Russian Roulette (bounce 3부터)
-            if (b >= 2u)
-            {
-                float rrProb = clamp(max(throughput.r,
-                               max(throughput.g, throughput.b)), 0.01f, 1.0f);
-                if (RandFloat(seed) > rrProb) break;
-                throughput /= rrProb;
-            }
-
+            float rrProb = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.01f, 1.0f);
+            if (b >= 1u && RandFloat(seed) > rrProb) break;
+            if (b >= 1u) throughput /= rrProb;
             ir.Origin    = ip.nextOrigin;
             ir.Direction = ip.nextDirection;
         }
     }
+    else if (flags < 0.5f)  // GB_FLAG_NORMAL: GI Reservoir로 간접광
+    {
+        GIReservoir gi = gi_reservoir_in[pidx];
+        if (gi.valid != 0u && gi.W > 0.0f)
+        {
+            float3 toSample = gi.samplePos - hitPos;
+            float  dist     = max(length(toSample), 0.001f);
+            float3 dir      = toSample / dist;
+            float  NdotL    = max(dot(N, dir), 0.0f);
 
-    // ── Firefly 억제: 간접광 휘도 상한 클램핑 ────────────────────
-    // 1spp 경로에서 가끔 발생하는 극단적 스파이크(firefly) 제거
-    float indLum = dot(indirectLight, float3(0.2126f, 0.7152f, 0.0722f));
-    if (indLum > 2.5f)
-        indirectLight *= 2.5f / indLum;
+            if (NdotL > 0.0f)
+            {
+                float vis = ShadowVis(hitPos + N * 0.001f, dir, dist - 0.01f);
+                float3 brdf = EvalBRDF(N, V, dir, albedo, metallic, roughness);
+                indirectLight = brdf * gi.radiance * vis * gi.W;
+            }
+        }
+    }
 
     // ── 시간적 누적 → Reinhard 톤매핑 → gamma 보정 ───────────────
     // randomSeed = App::m_shadeAccumCount

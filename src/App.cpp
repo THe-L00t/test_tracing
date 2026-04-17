@@ -302,9 +302,10 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
     m_restir.Init(m_core.Device(), m_core.CbvSrvUavHeap(),
                   m_globalRS.Get(), width, height);
 
-    // GBuffer / Shade DXR PSO 빌드
+    // GBuffer / GI Initial / Shade DXR PSO 빌드
     BuildGBufferPSO();
     BuildShadePSO();
+    BuildGIInitialPSO();
 
     // 초기 씬(0) 광원 업로드
     {
@@ -867,7 +868,17 @@ void App::OnRender()
         // Pass 4: Spatial (이웃 픽셀 재사용 x2)
         m_restir.DispatchSpatial(cmd, m_width, m_height);
 
-        // Pass 5: Shade (그림자 레이 + GGX BRDF → g_output)
+        // Pass 5: GI Initial (BRDF 샘플링 → x_s 기록)
+        m_restir.DispatchGI_Initial(cmd, m_giInitialPSO.Get(),
+                                    m_giInitialShaderTable, m_width, m_height);
+
+        // Pass 6: GI Temporal (이전 프레임 GI 재사용)
+        m_restir.DispatchGI_Temporal(cmd, m_width, m_height);
+
+        // Pass 7: GI Spatial (이웃 픽셀 GI 재사용)
+        m_restir.DispatchGI_Spatial(cmd, m_width, m_height);
+
+        // Pass 8: Shade (DI 직접광 + GI 간접광 → g_output)
         m_restir.DispatchShade(cmd, m_shadePSO.Get(),
                                m_shadeShaderTable, m_width, m_height);
 
@@ -880,6 +891,7 @@ void App::OnRender()
         // 다음 프레임을 위해 이전 카메라 저장 및 Reservoir 교환
         m_prevCamera = m_camera;
         m_restir.SwapReservoirs();
+        m_restir.SwapGIReservoirs();
     }
 
     // 결과를 백버퍼로 복사 후 Present
@@ -1077,7 +1089,70 @@ void App::BuildShadePSO()
     stDesc.hitGroupID = m_shadePSOProps->GetShaderIdentifier(L"HitGroup_Shade");
     m_shadeShaderTable.Build(m_core.Device(), stDesc);
 
-    std::println("[App] Shade PSO 완료 (직접광 ReSTIR + 1-bounce 간접광 + 유리 굴절)");
+    std::println("[App] Shade PSO 완료 (ReSTIR DI + ReSTIR GI + 유리 굴절)");
+}
+
+// ---------------------------------------------------------------
+//  GI Initial PSO 빌드
+//  셰이더: RayGen_GI_Initial, Miss_GI_Initial, MissShadow_GI_Initial,
+//          ClosestHit_GI_Initial  (ReSTIR_GI_Initial.hlsl)
+//
+//  GIPathPayload: 88 bytes → MaxPayloadSizeInBytes = 96
+//  Depth 2: RayGen(0) → ClosestHit_GI_Initial(1) → ShadowVis(2)
+// ---------------------------------------------------------------
+void App::BuildGIInitialPSO()
+{
+    auto dxil = CompileDXRLib(L"shaders/ReSTIR_GI_Initial.hlsl");
+
+    D3D12_EXPORT_DESC exports[] = {
+        { L"RayGen_GI_Initial",      nullptr, D3D12_EXPORT_FLAG_NONE },
+        { L"Miss_GI_Initial",        nullptr, D3D12_EXPORT_FLAG_NONE },
+        { L"MissShadow_GI_Initial",  nullptr, D3D12_EXPORT_FLAG_NONE },
+        { L"ClosestHit_GI_Initial",  nullptr, D3D12_EXPORT_FLAG_NONE },
+    };
+    D3D12_DXIL_LIBRARY_DESC lib{};
+    lib.DXILLibrary = { dxil->GetBufferPointer(), dxil->GetBufferSize() };
+    lib.NumExports  = static_cast<UINT>(std::size(exports));
+    lib.pExports    = exports;
+
+    D3D12_HIT_GROUP_DESC hitGroup{};
+    hitGroup.HitGroupExport         = L"HitGroup_GI_Initial";
+    hitGroup.Type                   = D3D12_HIT_GROUP_TYPE_TRIANGLES;
+    hitGroup.ClosestHitShaderImport = L"ClosestHit_GI_Initial";
+
+    D3D12_RAYTRACING_SHADER_CONFIG sc{};
+    sc.MaxPayloadSizeInBytes   = 96;   // GIPathPayload 88 bytes + 여유
+    sc.MaxAttributeSizeInBytes = 8;
+
+    D3D12_RAYTRACING_PIPELINE_CONFIG pc{};
+    pc.MaxTraceRecursionDepth = 2;     // RayGen(0) → ClosestHit(1) → ShadowRay(2)
+
+    D3D12_GLOBAL_ROOT_SIGNATURE grs{};
+    grs.pGlobalRootSignature = m_globalRS.Get();
+
+    D3D12_STATE_SUBOBJECT subs[5]{};
+    subs[0] = { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,               &lib      };
+    subs[1] = { D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,                  &hitGroup };
+    subs[2] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,   &sc       };
+    subs[3] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pc       };
+    subs[4] = { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,      &grs      };
+
+    D3D12_STATE_OBJECT_DESC soDesc{};
+    soDesc.Type          = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
+    soDesc.NumSubobjects = static_cast<UINT>(std::size(subs));
+    soDesc.pSubobjects   = subs;
+
+    ThrowIfFailed(m_core.Device()->CreateStateObject(&soDesc, IID_PPV_ARGS(&m_giInitialPSO)));
+    ThrowIfFailed(m_giInitialPSO.As(&m_giInitialPSOProps));
+
+    ShaderTable::Desc stDesc{};
+    stDesc.rayGenID   = m_giInitialPSOProps->GetShaderIdentifier(L"RayGen_GI_Initial");
+    stDesc.missID     = m_giInitialPSOProps->GetShaderIdentifier(L"Miss_GI_Initial");
+    stDesc.missID2    = m_giInitialPSOProps->GetShaderIdentifier(L"MissShadow_GI_Initial");
+    stDesc.hitGroupID = m_giInitialPSOProps->GetShaderIdentifier(L"HitGroup_GI_Initial");
+    m_giInitialShaderTable.Build(m_core.Device(), stDesc);
+
+    std::println("[App] GI Initial PSO 완료 (ReSTIR GI 첫 번째 바운스 샘플링)");
 }
 
 // ---------------------------------------------------------------

@@ -262,28 +262,58 @@ void ReSTIRPass::CreateBuffers(ID3D12Device* device,
     // 슬롯 20: SRV t12 – prev_gbuf_normal
     m_prevGBNormalSRV   = MakeSRV_Tex(m_prevGBNormal,   DXGI_FORMAT_R32G32B32A32_FLOAT);
 
-    // 슬롯 21-24: 스테이징 (셰이더 비접근, CopyDescriptor 소스)
+    // 슬롯 21-24: DI 스테이징 (셰이더 비접근, CopyDescriptor 소스)
     auto stageA_UAV = MakeUAV_Buf(m_reservoirA, kReservoirStride, pixCount);
     auto stageB_UAV = MakeUAV_Buf(m_reservoirB, kReservoirStride, pixCount);
     auto stageA_SRV = MakeSRV_Buf(m_reservoirA, kReservoirStride, pixCount);
     auto stageB_SRV = MakeSRV_Buf(m_reservoirB, kReservoirStride, pixCount);
 
-    // 동적 갱신 대상 슬롯 CPU 핸들 저장
-    m_heapSlot11_cpu = resA_UAV_handle.cpu;   // slot 11 = u6 cur UAV (초기 A)
-    m_heapSlot12_cpu = resB_UAV_handle.cpu;   // slot 12 = u7 prev UAV (초기 B)
-    m_heapSlot18_cpu = resA_SRV_handle.cpu;   // slot 18 = t10 reservoir_in SRV (초기 A)
+    // ── GI Reservoir 버퍼 (double-buffered, sizeof(GIReservoir)=64) ─
+    constexpr uint32_t kGIReservoirStride = 64u;
+    m_giReservoirA = CreateStructuredBuffer(device, kGIReservoirStride, pixCount, L"GIReservoirA");
+    m_giReservoirB = CreateStructuredBuffer(device, kGIReservoirStride, pixCount, L"GIReservoirB");
 
-    // 스테이징 핸들 저장
+    // 슬롯 25: UAV u8 – gi_reservoir_cur (초기: A)
+    auto giResA_UAV = MakeUAV_Buf(m_giReservoirA, kGIReservoirStride, pixCount);
+    // 슬롯 26: UAV u9 – gi_reservoir_prev (초기: B)
+    auto giResB_UAV = MakeUAV_Buf(m_giReservoirB, kGIReservoirStride, pixCount);
+    // 슬롯 27: SRV t13 – gi_reservoir_in (초기: A_SRV)
+    auto giResA_SRV = MakeSRV_Buf(m_giReservoirA, kGIReservoirStride, pixCount);
+
+    // 슬롯 28-31: GI 스테이징
+    auto stageGIA_UAV = MakeUAV_Buf(m_giReservoirA, kGIReservoirStride, pixCount);
+    auto stageGIB_UAV = MakeUAV_Buf(m_giReservoirB, kGIReservoirStride, pixCount);
+    auto stageGIA_SRV = MakeSRV_Buf(m_giReservoirA, kGIReservoirStride, pixCount);
+    auto stageGIB_SRV = MakeSRV_Buf(m_giReservoirB, kGIReservoirStride, pixCount);
+
+    // 동적 갱신 대상 슬롯 CPU 핸들 저장 (DI)
+    m_heapSlot11_cpu = resA_UAV_handle.cpu;
+    m_heapSlot12_cpu = resB_UAV_handle.cpu;
+    m_heapSlot18_cpu = resA_SRV_handle.cpu;
+
     m_stageResA_UAV = stageA_UAV.cpu;
     m_stageResB_UAV = stageB_UAV.cpu;
     m_stageResA_SRV = stageA_SRV.cpu;
     m_stageResB_SRV = stageB_SRV.cpu;
 
-    // 초기 상태: cur=A, prev=B, reservoir_in=A
-    m_curIsA    = true;
-    m_gbufState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    m_resAState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    m_resBState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    // 동적 갱신 대상 슬롯 CPU 핸들 저장 (GI)
+    m_heapSlot25_cpu = giResA_UAV.cpu;
+    m_heapSlot26_cpu = giResB_UAV.cpu;
+    m_heapSlot27_cpu = giResA_SRV.cpu;
+
+    m_stageGIResA_UAV = stageGIA_UAV.cpu;
+    m_stageGIResB_UAV = stageGIB_UAV.cpu;
+    m_stageGIResA_SRV = stageGIA_SRV.cpu;
+    m_stageGIResB_SRV = stageGIB_SRV.cpu;
+
+    // 초기 상태
+    m_curIsA     = true;
+    m_giCurIsA   = true;
+    m_gbufState  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    m_resAState  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    m_resBState  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    m_giResAState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    m_giResBState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
     std::println("[ReSTIRPass] 버퍼 생성 완료 ({}x{}, {} pixels)", w, h, pixCount);
 }
@@ -305,11 +335,13 @@ void ReSTIRPass::CreateComputePSOs(ID3D12Device5*       device,
                       std::format("Compute PSO 생성 실패: {}:{}", file, entry));
     };
 
-    createPSO("shaders/ReSTIR_Initial.hlsl",  "CS_Initial",  m_psoInitial);
-    createPSO("shaders/ReSTIR_Temporal.hlsl", "CS_Temporal", m_psoTemporal);
-    createPSO("shaders/ReSTIR_Spatial.hlsl",  "CS_Spatial",  m_psoSpatial);
+    createPSO("shaders/ReSTIR_Initial.hlsl",     "CS_Initial",     m_psoInitial);
+    createPSO("shaders/ReSTIR_Temporal.hlsl",    "CS_Temporal",    m_psoTemporal);
+    createPSO("shaders/ReSTIR_Spatial.hlsl",     "CS_Spatial",     m_psoSpatial);
+    createPSO("shaders/ReSTIR_GI_Temporal.hlsl", "CS_GI_Temporal", m_psoGITemporal);
+    createPSO("shaders/ReSTIR_GI_Spatial.hlsl",  "CS_GI_Spatial",  m_psoGISpatial);
 
-    std::println("[ReSTIRPass] Compute PSO 생성 완료");
+    std::println("[ReSTIRPass] Compute PSO 생성 완료 (DI + GI)");
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -504,6 +536,139 @@ void ReSTIRPass::DispatchSpatial(ID3D12GraphicsCommandList* cmdList,
 }
 
 // ──────────────────────────────────────────────────────────────
+//  DispatchGI_Initial  – [GI Pass 1] DXR BRDF 샘플링 → x_s 기록
+//
+//  진입: GBuffer = SRV, gi_reservoir_cur = UAV
+//  퇴장: gi_reservoir_cur = UAV (GI Temporal이 이어서 씀)
+// ──────────────────────────────────────────────────────────────
+void ReSTIRPass::DispatchGI_Initial(ID3D12GraphicsCommandList4* cmdList,
+                                     ID3D12StateObject*          giInitialPSO,
+                                     const ShaderTable&          shaderTable,
+                                     uint32_t w, uint32_t h)
+{
+    // gi_reservoir_cur(A) UAV 상태 확인
+    TransitionRes(cmdList, m_giReservoirA.Get(), m_giResAState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionRes(cmdList, m_giReservoirB.Get(), m_giResBState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    cmdList->SetPipelineState1(giInitialPSO);
+
+    D3D12_DISPATCH_RAYS_DESC desc{};
+    desc.RayGenerationShaderRecord = shaderTable.RayGenRange();
+    desc.MissShaderTable           = shaderTable.MissRange();
+    desc.HitGroupTable             = shaderTable.HitGroupRange();
+    desc.Width  = w;
+    desc.Height = h;
+    desc.Depth  = 1;
+    cmdList->DispatchRays(&desc);
+
+    // UAV 배리어 (GI Temporal이 이어서 읽음)
+    auto* curRes = m_giCurIsA ? m_giReservoirA.Get() : m_giReservoirB.Get();
+    D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    b.UAV.pResource = curRes;
+    cmdList->ResourceBarrier(1, &b);
+}
+
+// ──────────────────────────────────────────────────────────────
+//  DispatchGI_Temporal  – [GI Pass 2] GI 시간적 재사용
+// ──────────────────────────────────────────────────────────────
+void ReSTIRPass::DispatchGI_Temporal(ID3D12GraphicsCommandList* cmdList,
+                                      uint32_t w, uint32_t h)
+{
+    cmdList->SetPipelineState(m_psoGITemporal.Get());
+    cmdList->Dispatch((w + 7u) / 8u, (h + 7u) / 8u, 1);
+
+    auto* curRes = m_giCurIsA ? m_giReservoirA.Get() : m_giReservoirB.Get();
+    D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    b.UAV.pResource = curRes;
+    cmdList->ResourceBarrier(1, &b);
+}
+
+// ──────────────────────────────────────────────────────────────
+//  DispatchGI_Spatial  – [GI Pass 3] GI 공간 재사용 (ping-pong 2회)
+//
+//  진입: gi_reservoir_cur = UAV
+//  퇴장: gi_reservoir_cur = SRV (slot27=t13), prev = UAV
+// ──────────────────────────────────────────────────────────────
+void ReSTIRPass::DispatchGI_Spatial(ID3D12GraphicsCommandList* cmdList,
+                                     uint32_t w, uint32_t h)
+{
+    uint32_t gx = (w + 7u) / 8u;
+    uint32_t gy = (h + 7u) / 8u;
+
+    ID3D12Resource* curRes  = m_giCurIsA ? m_giReservoirA.Get() : m_giReservoirB.Get();
+    ID3D12Resource* prevRes = m_giCurIsA ? m_giReservoirB.Get() : m_giReservoirA.Get();
+    D3D12_RESOURCE_STATES& curState  = m_giCurIsA ? m_giResAState : m_giResBState;
+    D3D12_RESOURCE_STATES& prevState = m_giCurIsA ? m_giResBState : m_giResAState;
+    D3D12_CPU_DESCRIPTOR_HANDLE curUAV  = m_giCurIsA ? m_stageGIResA_UAV : m_stageGIResB_UAV;
+    D3D12_CPU_DESCRIPTOR_HANDLE prevUAV = m_giCurIsA ? m_stageGIResB_UAV : m_stageGIResA_UAV;
+    D3D12_CPU_DESCRIPTOR_HANDLE curSRV  = m_giCurIsA ? m_stageGIResA_SRV : m_stageGIResB_SRV;
+    D3D12_CPU_DESCRIPTOR_HANDLE prevSRV = m_giCurIsA ? m_stageGIResB_SRV : m_stageGIResA_SRV;
+
+    // ── Pass 0: cur(SRV t13 읽기) → prev(UAV u8 쓰기) ────────────
+    TransitionRes(cmdList, curRes, curState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    CopyDesc(m_heapSlot27_cpu, curSRV);    // t13 = cur_SRV (읽기)
+    CopyDesc(m_heapSlot25_cpu, prevUAV);   // u8  = prev_UAV (쓰기)
+
+    cmdList->SetPipelineState(m_psoGISpatial.Get());
+    cmdList->Dispatch(gx, gy, 1);
+
+    {
+        D3D12_RESOURCE_BARRIER barriers[2]{};
+        barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[0].Transition = { prevRes, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+        barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[1].Transition = { curRes, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
+        cmdList->ResourceBarrier(2, barriers);
+        prevState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        curState  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    }
+
+    // ── Pass 1: prev(SRV t13 읽기) → cur(UAV u8 쓰기) ───────────
+    CopyDesc(m_heapSlot27_cpu, prevSRV);   // t13 = prev_SRV (읽기)
+    CopyDesc(m_heapSlot25_cpu, curUAV);    // u8  = cur_UAV  (쓰기)
+
+    cmdList->SetPipelineState(m_psoGISpatial.Get());
+    cmdList->Dispatch(gx, gy, 1);
+
+    {
+        D3D12_RESOURCE_BARRIER barriers[2]{};
+        barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[0].Transition = { curRes, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+        barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[1].Transition = { prevRes, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
+        cmdList->ResourceBarrier(2, barriers);
+        curState  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        prevState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    }
+
+    // t13 = cur_SRV (Shade가 읽을 최종 GI Reservoir), u8 = cur_UAV 복원
+    CopyDesc(m_heapSlot27_cpu, curSRV);
+    CopyDesc(m_heapSlot25_cpu, curUAV);
+}
+
+// ──────────────────────────────────────────────────────────────
+//  SwapGIReservoirs
+// ──────────────────────────────────────────────────────────────
+void ReSTIRPass::SwapGIReservoirs()
+{
+    m_giCurIsA = !m_giCurIsA;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE newCurUAV  = m_giCurIsA ? m_stageGIResA_UAV : m_stageGIResB_UAV;
+    D3D12_CPU_DESCRIPTOR_HANDLE newPrevUAV = m_giCurIsA ? m_stageGIResB_UAV : m_stageGIResA_UAV;
+
+    CopyDesc(m_heapSlot25_cpu, newCurUAV);   // u8 = 새 cur UAV
+    CopyDesc(m_heapSlot26_cpu, newPrevUAV);  // u9 = 새 prev UAV
+}
+
+// ──────────────────────────────────────────────────────────────
 //  DispatchShade  – [Pass 5] DXR 그림자 레이 + GGX BRDF → g_output
 //
 //  진입: GBuffer = SRV, reservoir cur = SRV (slot18=t10)
@@ -582,10 +747,12 @@ void ReSTIRPass::Shutdown()
     m_gbAlbedo   = nullptr; m_gbMatInfo  = nullptr;
     m_prevGBWorldPos = nullptr; m_prevGBNormal = nullptr;
     m_reservoirA = nullptr; m_reservoirB = nullptr;
+    m_giReservoirA = nullptr; m_giReservoirB = nullptr;
     m_lightListBuf = nullptr; m_lightListUpload = nullptr;
     m_restirCB   = nullptr;
     m_psoInitial = nullptr; m_psoTemporal = nullptr;
     m_psoSpatial = nullptr;
+    m_psoGITemporal = nullptr; m_psoGISpatial = nullptr;
     m_device     = nullptr;
 }
 
