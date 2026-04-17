@@ -320,7 +320,7 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
 
     m_sceneBuilt = true;
     std::println("[App] 초기화 완료 - 씬 0 (야외)");
-    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, F 디노이저 토글, R ReSTIR 토글, ESC 종료");
+    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, F 디노이저 토글, ESC 종료");
 }
 
 void App::Shutdown()
@@ -748,9 +748,7 @@ void App::UpdateSceneCB()
 
     // 누적 파라미터
     cb.frameCount  = m_frameCount;
-    // ReSTIR 모드: randomSeed = m_shadeAccumCount (씬 전환 시만 리셋, 카메라 이동 무관)
-    // Path Tracer:  randomSeed = m_frameCount (카메라 이동 시 리셋, 기존 동작 유지)
-    cb.randomSeed  = m_restirEnabled ? m_shadeAccumCount : m_frameCount;
+    cb.randomSeed  = m_shadeAccumCount;
 
     // 업로드 버퍼에 직접 기록
     void* mapped = nullptr;
@@ -776,14 +774,6 @@ void App::OnKeyDown(uint32_t key)
         m_cameraMoved           = true;
         m_accumDirty            = true;
         std::println("[App] 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
-    }
-    else if (key == 'R')
-    {
-        m_restirEnabled = !m_restirEnabled;
-        m_frameCount    = 0;
-        m_cameraMoved   = true;
-        m_accumDirty    = true;
-        std::println("[App] ReSTIR {}", m_restirEnabled ? "ON" : "OFF");
     }
 }
 
@@ -859,7 +849,6 @@ void App::OnRender()
     // 파라미터 1: SceneCB
     cmd->SetComputeRootConstantBufferView(1, m_sceneCB->GetGPUVirtualAddress());
 
-    if (m_restirEnabled)
     {
         // ── ReSTIR 5 패스 ───────────────────────────────────
         UpdateReSTIRCB();
@@ -891,32 +880,6 @@ void App::OnRender()
         // 다음 프레임을 위해 이전 카메라 저장 및 Reservoir 교환
         m_prevCamera = m_camera;
         m_restir.SwapReservoirs();
-    }
-    else
-    {
-        // ── 기존 클래식 Path Tracing ─────────────────────────
-        cmd->SetPipelineState1(m_pipeline.PSO());
-
-        const auto& st = m_pipeline.GetShaderTable();
-        D3D12_DISPATCH_RAYS_DESC dispatchDesc{};
-        dispatchDesc.RayGenerationShaderRecord = st.RayGenRange();
-        dispatchDesc.MissShaderTable           = st.MissRange();
-        dispatchDesc.HitGroupTable             = st.HitGroupRange();
-        dispatchDesc.Width                     = m_width;
-        dispatchDesc.Height                    = m_height;
-        dispatchDesc.Depth                     = 1;
-
-        cmd->DispatchRays(&dispatchDesc);
-
-        m_renderTarget.UAVBarriers(cmd);
-
-        // 디노이저가 활성화된 경우
-        if (m_denoiseEnabled)
-        {
-            m_denoiser.Apply(cmd,
-                             m_renderTarget.AccumResource(),
-                             m_renderTarget.Resource());
-        }
     }
 
     // 결과를 백버퍼로 복사 후 Present

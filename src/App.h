@@ -80,9 +80,7 @@ private:
     bool     m_denoiseEnabled = false;
 
     // ── ReSTIR ────────────────────────────────────────────────
-    // TODO [Session 1]: ReSTIR 활성화 플래그 (R키 토글, 기본 false)
     ReSTIRPass m_restir;
-    bool       m_restirEnabled = false;
 
     // GBuffer + Final Shade 용 별도 DXR PSO
     // (기존 m_pipeline은 classic PT 유지)
