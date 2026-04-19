@@ -407,9 +407,12 @@ void MergeGIReservoir(inout GIReservoir r_a, GIReservoir r_b,
 
 void FinalizeGIReservoir(inout GIReservoir r, float pHat_selected)
 {
-    r.W = (pHat_selected > 0.0f && r.M > 0u)
+    // W = wSum / (M * p̂). 선택된 샘플의 p̂가 매우 작을 때 W가 폭발하는 것을 방지.
+    // radiance ≤ 3 (GI_Initial 클램프) × W ≤ 10 = 최대 indirectLight ≤ 30 → Reinhard에서 안전.
+    float rawW = (pHat_selected > 0.0f && r.M > 0u)
         ? r.wSum / (float(r.M) * pHat_selected)
         : 0.0f;
+    r.W = min(rawW, 10.0f);
 }
 
 // GI 공간 재사용 Jacobian (Ouyang 2021, Eq.1)

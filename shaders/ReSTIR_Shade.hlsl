@@ -396,10 +396,11 @@ void RayGen_Shade()
             if (NdotL > 0.0f)
             {
                 float vis = ShadowVis(hitPos + N * 0.001f, dir, dist - 0.01f);
-                // gi.radiance = initAtten * L_o = (brdf·cosθ/pdf) · L_o
-                // initAtten은 GI_Initial에서 SampleBRDF가 이미 적용한 MC 가중치.
-                // 여기서 brdf를 추가로 곱하면 이중 적용(double-count)이므로 생략.
+                // gi.radiance = initAtten * L_o. brdf는 GI_Initial SampleBRDF에서 이미 적용됨.
                 indirectLight = gi.radiance * vis * gi.W;
+                // Firefly 클램프: W 폭발로 인한 극단값이 누적 버퍼를 오염시키는 것을 방지
+                float ilLum = dot(indirectLight, float3(0.2126f, 0.7152f, 0.0722f));
+                if (ilLum > 3.0f) indirectLight *= 3.0f / ilLum;
             }
         }
     }
