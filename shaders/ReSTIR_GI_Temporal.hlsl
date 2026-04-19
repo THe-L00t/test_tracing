@@ -27,7 +27,6 @@
 // ── 리소스 ──────────────────────────────────────────────────────
 Texture2D<float4>               gbuf_worldPos      : register(t6);
 Texture2D<float4>               gbuf_normal        : register(t7);
-Texture2D<float4>               gbuf_albedo        : register(t8);  // EvalGIpHat용 재질 정보
 Texture2D<float4>               gbuf_matInfo       : register(t9);
 Texture2D<float4>               prev_gbuf_worldPos : register(t11);
 Texture2D<float4>               prev_gbuf_normal   : register(t12);
@@ -90,16 +89,8 @@ void CS_GI_Temporal(uint3 tid : SV_DispatchThreadID)
 
     if (wPos.w < 0.0f || matInf.b > 0.5f) return;
 
-    float3 N        = gbuf_normal[px].xyz;
-    float  depth    = matInf.g;
-    float  roughness= matInf.r;
-
-    float4 alb     = gbuf_albedo[px];
-    float3 albedo  = alb.rgb;
-    float  metallic= alb.a;
-
-    // 시점 방향 (EvalGIpHat용)
-    float3 V = normalize(camPos - wPos.xyz);
+    float3 N     = gbuf_normal[px].xyz;
+    float  depth = matInf.g;
 
     uint seed = (px.x * 1973u + px.y * 9277u + frameIndex * 26699u + 7919u) | 1u;
 
@@ -135,13 +126,11 @@ void CS_GI_Temporal(uint3 tid : SV_DispatchThreadID)
         float pHat_prev = 0.0f;
         if (R_prev.valid != 0u)
         {
-            // 이전 샘플 xs를 현재 픽셀 기준 방향으로 재평가 (RTXDI).
             // Jacobian으로 입체각 측도 보정 (Ouyang 2021, Eq.1).
-            float3 dirPrev = normalize(R_prev.samplePos - wPos.xyz);
-            float  J       = CalcGIJacobian(wPos.xyz, prevWPos,
-                                            R_prev.samplePos, R_prev.sampleNormal);
-            pHat_prev = EvalGIpHat(R_prev.radiance, N, V, dirPrev,
-                                   albedo, metallic, roughness) * J;
+            // pHat = luma(L_o): 뷰 독립적 → V 변화에도 안정적 선택 확률.
+            float J = CalcGIJacobian(wPos.xyz, prevWPos,
+                                     R_prev.samplePos, R_prev.sampleNormal);
+            pHat_prev = EvalGIpHat(R_prev.radiance) * J;
         }
 
         MergeGIReservoir(R_cur, R_prev, pHat_prev, seed);
@@ -149,9 +138,7 @@ void CS_GI_Temporal(uint3 tid : SV_DispatchThreadID)
 
     if (R_cur.valid != 0u)
     {
-        float3 dirCur = normalize(R_cur.samplePos - wPos.xyz);
-        FinalizeGIReservoir(R_cur,
-            EvalGIpHat(R_cur.radiance, N, V, dirCur, albedo, metallic, roughness));
+        FinalizeGIReservoir(R_cur, EvalGIpHat(R_cur.radiance));
     }
 
     gi_reservoir_cur[pidx] = R_cur;

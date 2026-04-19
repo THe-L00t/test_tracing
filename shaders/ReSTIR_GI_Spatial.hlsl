@@ -24,7 +24,6 @@
 // ── 리소스 ──────────────────────────────────────────────────────
 Texture2D<float4>               gbuf_worldPos      : register(t6);
 Texture2D<float4>               gbuf_normal        : register(t7);
-Texture2D<float4>               gbuf_albedo        : register(t8);  // EvalGIpHat용
 Texture2D<float4>               gbuf_matInfo       : register(t9);
 
 StructuredBuffer<GIReservoir>   gi_reservoir_in    : register(t13);
@@ -59,15 +58,8 @@ void CS_GI_Spatial(uint3 tid : SV_DispatchThreadID)
 
     if (wPos.w < 0.0f || matInf.b > 0.5f) return;
 
-    float3 xp       = wPos.xyz;
-    float3 Np       = gbuf_normal[px].xyz;
-    float  roughness= matInf.r;
-
-    float4 alb     = gbuf_albedo[px];
-    float3 albedo  = alb.rgb;
-    float  metallic= alb.a;
-
-    float3 Vp = normalize(camPos - xp);
+    float3 xp = wPos.xyz;
+    float3 Np = gbuf_normal[px].xyz;
 
     uint seed = (px.x * 1973u + px.y * 9277u + frameIndex * 26699u + 1234u) | 1u;
 
@@ -100,19 +92,15 @@ void CS_GI_Spatial(uint3 tid : SV_DispatchThreadID)
         // Jacobian 보정: 이웃 q의 xs를 현재 p에서 재사용 시 입체각 측도 변환
         float J = CalcGIJacobian(xp, xq, R_q.samplePos, R_q.sampleNormal);
 
-        // pHat: 현재 픽셀 p의 BRDF로 평가 (RTXDI 방식)
-        float3 dirQ = normalize(R_q.samplePos - xp);  // p에서 xs 방향
-        float  pHat = EvalGIpHat(R_q.radiance, Np, Vp, dirQ, albedo, metallic, roughness) * J;
+        // pHat = luma(L_o): 뷰 독립적 → 카메라 이동에도 안정적 선택 확률.
+        float pHat = EvalGIpHat(R_q.radiance) * J;
 
         MergeGIReservoir(R_p, R_q, pHat, seed);
     }
 
     if (R_p.valid != 0u)
     {
-        // 선택된 샘플의 pHat을 현재 픽셀 기준으로 재평가
-        float3 dirSel   = normalize(R_p.samplePos - xp);
-        float  pHatSel  = EvalGIpHat(R_p.radiance, Np, Vp, dirSel, albedo, metallic, roughness);
-        FinalizeGIReservoir(R_p, pHatSel);
+        FinalizeGIReservoir(R_p, EvalGIpHat(R_p.radiance));
     }
 
     gi_reservoir_cur[pidx] = R_p;

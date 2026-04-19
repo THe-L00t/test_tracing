@@ -347,9 +347,8 @@ void RayGen_GI_Initial()
     if (!firstHitValid)
     {
         // 첫 바운스가 sky miss: 환경광을 먼 거리의 "하늘 샘플"로 저장.
-        // accumulated = raw sky L_o (BRDF 미포함).
-        // wSum = p̂ / initPdf (RIS 가중치): W = 1/initPdf → Shade에서 f_r·L_o·vis/initPdf 복원.
-        float pHat = EvalGIpHat(accumulated, N, V, initDir, albedo, metallic, roughness);
+        // pHat = luma(L_o) 뷰 독립적 → 안정적 temporal 재사용.
+        float pHat = EvalGIpHat(accumulated);
         if (pHat > 0.0f)
         {
             R.samplePos    = hitPos + initDir * 1e5f;  // 하늘 방향 먼 점
@@ -365,9 +364,9 @@ void RayGen_GI_Initial()
     }
 
     // GI Reservoir 생성 (M=1, 단일 초기 샘플)
-    // accumulated = raw L_o(xs → xv), BRDF 미포함.
-    // wSum = p̂ / initPdf → W = 1/initPdf → Shade: f_r·NdotL·L_o·vis/initPdf = 올바른 MC 추정값.
-    float pHat     = EvalGIpHat(accumulated, N, V, initDir, albedo, metallic, roughness);
+    // pHat = luma(L_o): 뷰 독립적. BRDF는 Shade에서만 적용.
+    // wSum = pHat / initPdf → W = 1/initPdf → Shade: f_r·NdotL·L_o·vis/initPdf ✓
+    float pHat     = EvalGIpHat(accumulated);
     R.samplePos    = firstHitPos;
     R.sampleNormal = firstHitNormal;
     R.radiance     = accumulated;                      // raw L_o

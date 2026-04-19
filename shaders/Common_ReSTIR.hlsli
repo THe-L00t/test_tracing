@@ -467,15 +467,16 @@ float3 EvalBRDF_GI(float3 N, float3 V, float3 L,
     return (spec + diff) * NdotL;
 }
 
-// GI Target PDF (RTXDI 방식, Ouyang 2021)
-//   p̂(xs) = luma( f_r(x_v, dir) · NdotL · L_o(xs) )
+// GI Target PDF (Ouyang 2021 표준 방식)
+//   p̂(xs) = luma( L_o(xs) )
 //
-// ▶ L_o는 raw incoming radiance (BRDF 미포함).
-//   BRDF를 pHat에 포함함으로써 specular 표면에서도 유효 샘플이 높은 가중치를 가짐.
-// ▶ 재사용 픽셀의 N, V, material로 평가 → 시간/공간 재사용에서도 올바른 MIS 가중치.
-float EvalGIpHat(float3 L_o, float3 N, float3 V, float3 dir,
-                 float3 albedo, float metallic, float roughness)
+// ▶ BRDF를 pHat에 포함하지 않는 이유:
+//   BRDF는 시점 방향 V에 의존 → 카메라 이동 시 pHat이 매 프레임 달라짐
+//   → Reservoir 선택 확률이 불안정 → 깜빡임(flickering) 발생.
+// ▶ L_o는 저장된 raw incoming radiance (BRDF 미포함, 뷰 독립적).
+//   BRDF는 오직 Shade 패스에서만 적용: f_r * NdotL * L_o * vis * W.
+// ▶ 뷰 독립적 pHat = 안정적 Temporal/Spatial 재사용.
+float EvalGIpHat(float3 L_o)
 {
-    float3 f = EvalBRDF_GI(N, V, dir, albedo, metallic, roughness);
-    return max(dot(f * L_o, float3(0.2126f, 0.7152f, 0.0722f)), 0.0f);
+    return max(dot(L_o, float3(0.2126f, 0.7152f, 0.0722f)), 0.0f);
 }
