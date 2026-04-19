@@ -102,9 +102,7 @@ void CS_GI_Temporal(uint3 tid : SV_DispatchThreadID)
     {
         if (R_cur.valid != 0u)
         {
-            float3 dirCur = normalize(R_cur.samplePos - wPos.xyz);
-            FinalizeGIReservoir(R_cur,
-                EvalGIpHat(R_cur.radiance, N, V, dirCur, albedo, metallic, roughness));
+            FinalizeGIReservoir(R_cur, EvalGIpHat(R_cur.radiance));
         }
         gi_reservoir_cur[pidx] = R_cur;
         return;
