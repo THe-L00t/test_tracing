@@ -366,6 +366,19 @@ void RayGen_GI_Initial()
 
     if (!firstHitValid)
     {
+        // 첫 바운스가 sky miss: 환경광을 먼 거리의 "하늘 샘플"로 저장.
+        // Shade에서 visibility ray가 막히지 않으면 올바른 간접광 기여.
+        float pHat = EvalGITargetPDF(accumulated);
+        if (pHat > 0.0f)
+        {
+            R.samplePos    = hitPos + initDir * 1e5f;  // 하늘 방향 먼 점
+            R.sampleNormal = -initDir;                  // 시점을 향한 법선
+            R.radiance     = accumulated;
+            R.valid        = 1u;
+            R.wSum         = pHat;
+            R.M            = 1u;
+            FinalizeGIReservoir(R, pHat);
+        }
         gi_reservoir_cur[pidx] = R;
         return;
     }

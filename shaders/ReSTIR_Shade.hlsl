@@ -396,8 +396,10 @@ void RayGen_Shade()
             if (NdotL > 0.0f)
             {
                 float vis = ShadowVis(hitPos + N * 0.001f, dir, dist - 0.01f);
-                float3 brdf = EvalBRDF(N, V, dir, albedo, metallic, roughness);
-                indirectLight = brdf * gi.radiance * vis * gi.W;
+                // gi.radiance = initAtten * L_o = (brdf·cosθ/pdf) · L_o
+                // initAtten은 GI_Initial에서 SampleBRDF가 이미 적용한 MC 가중치.
+                // 여기서 brdf를 추가로 곱하면 이중 적용(double-count)이므로 생략.
+                indirectLight = gi.radiance * vis * gi.W;
             }
         }
     }
