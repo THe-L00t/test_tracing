@@ -384,13 +384,14 @@ void RayGen_GI_Initial()
     }
 
     // GI Reservoir 생성 (M=1, 단일 초기 샘플)
+    float pHat     = EvalGITargetPDF(accumulated);
     R.samplePos    = firstHitPos;
     R.sampleNormal = firstHitNormal;
     R.radiance     = accumulated;
     R.valid        = 1u;
-    R.wSum         = EvalGITargetPDF(accumulated);
+    R.wSum         = pHat;
     R.M            = 1u;
-    FinalizeGIReservoir(R, EvalGITargetPDF(accumulated));
+    FinalizeGIReservoir(R, pHat);
 
     gi_reservoir_cur[pidx] = R;
 }

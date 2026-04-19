@@ -118,7 +118,14 @@ void CS_GI_Temporal(uint3 tid : SV_DispatchThreadID)
 
         float pHat_prev = 0.0f;
         if (R_prev.valid != 0u)
-            pHat_prev = EvalGITargetPDF(R_prev.radiance);
+        {
+            // Jacobian 보정 (Ouyang 2021, Eq.1): 이전 프레임 primary hit x_q와 현재 x_p 간
+            // 입체각 측도 차이를 보정. 없으면 카메라 이동 시 temporal bias 발생.
+            float3 prevWPos = prev_gbuf_worldPos[uint2(prevPx)].xyz;
+            float  J        = CalcGIJacobian(wPos.xyz, prevWPos,
+                                             R_prev.samplePos, R_prev.sampleNormal);
+            pHat_prev = EvalGITargetPDF(R_prev.radiance) * J;
+        }
 
         MergeGIReservoir(R_cur, R_prev, pHat_prev, seed);
     }

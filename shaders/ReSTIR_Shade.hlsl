@@ -351,7 +351,10 @@ void RayGen_Shade()
 
     if (flags > 0.5f && flags < 1.5f)  // GB_FLAG_GLASS: 굴절/반사 경로 추적
     {
-        float  ior  = 1.5f;
+        // matIdx → emissive 값으로 IOR 복원 (GBuffer 기록 방식과 동일)
+        uint   matIdxGlass = uint(normData.w + 0.5f);
+        float  emissGlass  = matEmissive[matIdxGlass];
+        float  ior         = (emissGlass < -1.5f) ? 1.5f : 1.3f;
         float3 inc  = -V;
         float  cosT = max(dot(N, V), 0.0f);
         float  r0   = (1.0f - ior) / (1.0f + ior); r0 *= r0;
@@ -406,10 +409,9 @@ void RayGen_Shade()
     }
 
     // ── 시간적 누적 → Reinhard 톤매핑 → gamma 보정 ───────────────
-    // randomSeed = App::m_shadeAccumCount
-    //   0 : 씬 전환 직후 (g_accumulation 클리어됨) → 전체 교체
-    //   N : 누적 N 프레임 → alpha = 1/(N+1) → 무한 수렴
-    //   카메라 이동 시 App 측에서 3으로 클램프 → alpha≈20% → 15~20프레임 내 갱신
+    // randomSeed = App::m_shadeAccumCount (최대 64까지 누적)
+    //   0 : 씬 전환/이동 직후 (g_accumulation 클리어됨) → 전체 교체 (alpha=1.0)
+    //   N : 누적 N 프레임 → alpha = 1/(N+1) → N=64 이후 alpha ≥ 1.5% 유지
     float3 total = directLight + indirectLight;
     float  alpha = (randomSeed == 0u) ? 1.0f : (1.0f / float(randomSeed + 1u));
     float3 accumulated = lerp(g_accumulation[idx].rgb, total, alpha);

@@ -83,8 +83,10 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     // ── 디스크립터 테이블 레이아웃 ──────────────────────────────
     // Range 0: UAV u0-u1  (2개,  힙 offset  0) output + accumulation
     // Range 1: SRV t0-t4  (5개,  힙 offset  2) TLAS + VBs
-    // Range 2: UAV u2-u7  (6개,  힙 offset  7) G-Buffer(4) + Reservoir cur/prev(2)
-    // Range 3: SRV t5-t10 (6개,  힙 offset 13) LightList(1) + G-Buffer SRV(4) + reservoir_in(1)
+    // Range 2: UAV u2-u7  (6개,  힙 offset  7) G-Buffer(4) + DI Reservoir cur/prev(2)
+    // Range 3: SRV t5-t12 (8개,  힙 offset 13) LightList(1) + G-Buffer SRV(4) + reservoir_in(1) + prev G-Buffer(2)
+    // Range 4: UAV u8-u9  (2개,  힙 offset 25) GI Reservoir cur/prev
+    // Range 5: SRV t13    (1개,  힙 offset 27) GI reservoir_in
     //
     // 힙 슬롯 요약:
     //  0: UAV u0 (g_output)        7: UAV u2 (gbuf_worldPos)   13: SRV t5  (lightList)
@@ -93,10 +95,14 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     //  3: SRV t1 (plane VB)       10: UAV u5 (gbuf_matInfo)    16: SRV t8  (gbuf_albedo)
     //  4: SRV t2 (cube VB)        11: UAV u6 (reservoir_cur)   17: SRV t9  (gbuf_matInfo)
     //  5: SRV t3 (room VB)        12: UAV u7 (reservoir_prev)  18: SRV t10 (reservoir_in) ← 동적
-    //  6: SRV t4 (sphere VB)
+    //  6: SRV t4 (sphere VB)                                   19: SRV t11 (prev_gbuf_worldPos)
+    //                                                           20: SRV t12 (prev_gbuf_normal)
     //
-    // 스테이징 슬롯 (19~22): CopyDescriptorsSimple 소스 (셰이더 비접근)
-    //  19: ResA_UAV  20: ResB_UAV  21: ResA_SRV  22: ResB_SRV
+    // 스테이징 슬롯 (21~24): DI CopyDescriptor 소스 (셰이더 비접근)
+    //  21: ResA_UAV  22: ResB_UAV  23: ResA_SRV  24: ResB_SRV
+    // 25: UAV u8 (gi_reservoir_cur)  26: UAV u9 (gi_reservoir_prev)  27: SRV t13 (gi_reservoir_in) ← 동적
+    // 스테이징 슬롯 (28~31): GI CopyDescriptor 소스 (셰이더 비접근)
+    //  28: GIResA_UAV  29: GIResB_UAV  30: GIResA_SRV  31: GIResB_SRV
 
     D3D12_DESCRIPTOR_RANGE1 ranges[6]{};
 
