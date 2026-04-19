@@ -394,14 +394,18 @@ void RayGen_Shade()
             float3 toSample = gi.samplePos - hitPos;
             float  dist     = max(length(toSample), 0.001f);
             float3 dir      = toSample / dist;
-            float  NdotL    = max(dot(N, dir), 0.0f);
 
-            if (NdotL > 0.0f)
+            // NdotL > 0 이어야 xs가 표면 위쪽 반구에 있음
+            // EvalBRDF_GI가 NdotL을 포함하므로 추가 곱셈 불필요
+            float3 brdfVal = EvalBRDF_GI(N, V, dir, albedo, metallic, roughness);
+            float  brdfLum = dot(brdfVal, float3(0.2126f, 0.7152f, 0.0722f));
+            if (brdfLum > 0.0f)
             {
-                float vis = ShadowVis(hitPos + N * 0.001f, dir, dist - 0.01f);
-                // gi.radiance = initAtten * L_o. brdf는 GI_Initial SampleBRDF에서 이미 적용됨.
-                indirectLight = gi.radiance * vis * gi.W;
-                // Firefly 클램프: W 폭발로 인한 극단값이 누적 버퍼를 오염시키는 것을 방지
+                // TMax: dist * 0.99f 로 자기 교차 방지 (dist - 0.01f 는 dist < 0.01 시 음수)
+                float vis = ShadowVis(hitPos + N * 0.001f, dir, dist * 0.99f);
+                // gi.radiance = raw L_o (BRDF 미포함). BRDF는 여기서 적용.
+                indirectLight = brdfVal * gi.radiance * vis * gi.W;
+                // Firefly 클램프
                 float ilLum = dot(indirectLight, float3(0.2126f, 0.7152f, 0.0722f));
                 if (ilLum > 3.0f) indirectLight *= 3.0f / ilLum;
             }

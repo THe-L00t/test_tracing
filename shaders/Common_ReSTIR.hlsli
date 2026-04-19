@@ -354,7 +354,7 @@ struct GIReservoir
     uint   valid;        // 1 = 유효한 샘플                   ( 4)
     float3 sampleNormal; // x_s 표면 법선 (Jacobian 보정용)   (12)
     float  wSum;         // 누적 가중치                       ( 4)
-    float3 radiance;     // x_s 방향의 누적 incoming radiance (12)
+    float3 radiance;     // L_o: x_s → x_v raw incoming radiance (BRDF 미포함)  (12)
     float  W;            // 비편향 기여 가중치                 ( 4)
     uint   M;            // 후보 수                           ( 4)
     uint   _pad0;        //                                   ( 4)
@@ -377,7 +377,8 @@ GIReservoir MakeEmptyGIReservoir()
     return r;
 }
 
-// p̂(x_s) = luma(radiance) — BRDF 미포함 (GGX wSum→0 방지, DI와 동일 전략)
+// [Deprecated] 단순 luma(L_o). 새 코드는 EvalGIpHat(BRDF 포함)을 사용할 것.
+// Initial pHat > 0 가드와 FinalizeGIReservoir 내부에서만 잔존.
 float EvalGITargetPDF(float3 radiance)
 {
     return max(dot(radiance, float3(0.2126f, 0.7152f, 0.0722f)), 0.0f);
@@ -440,4 +441,42 @@ float CalcGIJacobian(float3 xp, float3 xq, float3 xs, float3 xsNormal)
     float  cosQ = abs(dot(normalize(dq), xsNormal));
     float  cosP = abs(dot(normalize(dp), xsNormal));
     return clamp((cosQ * dp2) / max(cosP * dq2, 1e-8f), 0.0f, 10.0f);
+}
+
+// ── GGX Cook-Torrance BRDF (f_r × NdotL 반환) ───────────────────
+// GI Temporal / Spatial pHat 평가 및 Shade 간접광 계산에 공통 사용.
+float3 EvalBRDF_GI(float3 N, float3 V, float3 L,
+                   float3 albedo, float metallic, float roughness)
+{
+    float NdotL = max(dot(N, L), 0.0f);
+    if (NdotL <= 0.0f) return float3(0.0f, 0.0f, 0.0f);
+
+    float  alpha  = max(roughness * roughness, 0.001f);
+    float  alpha2 = alpha * alpha;
+    float  NdotV  = max(dot(N, V), 0.0001f);
+    float3 VpL    = V + L;
+    float3 H      = normalize(length(VpL) > 1e-4f ? VpL : N);
+    float  NdotH  = max(dot(N, H), 0.0001f);
+    float  VdotH  = max(dot(V, H), 0.0001f);
+
+    float3 F0   = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+    float3 F    = SchlickF(VdotH, F0);
+    float  D    = D_GGX(NdotH, alpha2);
+    float  G    = G1_Smith(NdotV, alpha2) * G1_Smith(NdotL, alpha2);
+    float3 spec = D * G * F / max(4.0f * NdotV * NdotL, 0.0001f);
+    float3 diff = (1.0f - F) * (1.0f - metallic) * albedo * INV_PI;
+    return (spec + diff) * NdotL;
+}
+
+// GI Target PDF (RTXDI 방식, Ouyang 2021)
+//   p̂(xs) = luma( f_r(x_v, dir) · NdotL · L_o(xs) )
+//
+// ▶ L_o는 raw incoming radiance (BRDF 미포함).
+//   BRDF를 pHat에 포함함으로써 specular 표면에서도 유효 샘플이 높은 가중치를 가짐.
+// ▶ 재사용 픽셀의 N, V, material로 평가 → 시간/공간 재사용에서도 올바른 MIS 가중치.
+float EvalGIpHat(float3 L_o, float3 N, float3 V, float3 dir,
+                 float3 albedo, float metallic, float roughness)
+{
+    float3 f = EvalBRDF_GI(N, V, dir, albedo, metallic, roughness);
+    return max(dot(f * L_o, float3(0.2126f, 0.7152f, 0.0722f)), 0.0f);
 }

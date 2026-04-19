@@ -115,29 +115,7 @@ void CalcLightContrib(LightData light, float3 hitPos,
     }
 }
 
-// GGX Cook-Torrance BRDF 평가
-float3 EvalBRDF_GI(float3 N, float3 V, float3 L,
-                   float3 albedo, float metallic, float roughness)
-{
-    float NdotL = max(dot(N, L), 0.0f);
-    if (NdotL <= 0.0f) return float3(0.0f, 0.0f, 0.0f);
-
-    float  alpha  = max(roughness * roughness, 0.001f);
-    float  alpha2 = alpha * alpha;
-    float  NdotV  = max(dot(N, V), 0.0001f);
-    float3 VplusL = V + L;
-    float3 H      = normalize(length(VplusL) > 1e-4f ? VplusL : N);
-    float  NdotH  = max(dot(N, H), 0.0001f);
-    float  VdotH  = max(dot(V, H), 0.0001f);
-
-    float3 F0   = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
-    float3 F    = SchlickF(VdotH, F0);
-    float  D    = D_GGX(NdotH, alpha2);
-    float  G    = G1_Smith(NdotV, alpha2) * G1_Smith(NdotL, alpha2);
-    float3 spec = D * G * F / max(4.0f * NdotV * NdotL, 0.0001f);
-    float3 diff = (1.0f - F) * (1.0f - metallic) * albedo * INV_PI;
-    return (spec + diff) * NdotL;
-}
+// EvalBRDF_GI는 Common_ReSTIR.hlsli에 정의
 
 // Miss[0]: 간접 레이 미스 → 환경광
 [shader("miss")]
@@ -312,9 +290,11 @@ void RayGen_GI_Initial()
     }
 
     // 경로 추적 (k_maxGIBounce 바운스)
+    // throughput은 1에서 시작: primary BRDF는 포함하지 않고 raw L_o만 누적.
+    // primary BRDF는 Shade/Temporal/Spatial에서 EvalGIpHat으로 평가 (RTXDI 방식).
     static const uint k_maxGIBounce = 3u;
 
-    float3 throughput    = initAtten;
+    float3 throughput    = float3(1.0f, 1.0f, 1.0f);
     float3 accumulated   = float3(0.0f, 0.0f, 0.0f);
     bool   firstHitValid = false;
     float3 firstHitPos   = float3(0.0f, 0.0f, 0.0f);
@@ -367,15 +347,16 @@ void RayGen_GI_Initial()
     if (!firstHitValid)
     {
         // 첫 바운스가 sky miss: 환경광을 먼 거리의 "하늘 샘플"로 저장.
-        // Shade에서 visibility ray가 막히지 않으면 올바른 간접광 기여.
-        float pHat = EvalGITargetPDF(accumulated);
+        // accumulated = raw sky L_o (BRDF 미포함).
+        // wSum = p̂ / initPdf (RIS 가중치): W = 1/initPdf → Shade에서 f_r·L_o·vis/initPdf 복원.
+        float pHat = EvalGIpHat(accumulated, N, V, initDir, albedo, metallic, roughness);
         if (pHat > 0.0f)
         {
             R.samplePos    = hitPos + initDir * 1e5f;  // 하늘 방향 먼 점
-            R.sampleNormal = -initDir;                  // 시점을 향한 법선
-            R.radiance     = accumulated;
+            R.sampleNormal = -initDir;
+            R.radiance     = accumulated;              // raw sky L_o
             R.valid        = 1u;
-            R.wSum         = pHat;
+            R.wSum         = pHat / max(initPdf, 1e-8f);
             R.M            = 1u;
             FinalizeGIReservoir(R, pHat);
         }
@@ -384,12 +365,14 @@ void RayGen_GI_Initial()
     }
 
     // GI Reservoir 생성 (M=1, 단일 초기 샘플)
-    float pHat     = EvalGITargetPDF(accumulated);
+    // accumulated = raw L_o(xs → xv), BRDF 미포함.
+    // wSum = p̂ / initPdf → W = 1/initPdf → Shade: f_r·NdotL·L_o·vis/initPdf = 올바른 MC 추정값.
+    float pHat     = EvalGIpHat(accumulated, N, V, initDir, albedo, metallic, roughness);
     R.samplePos    = firstHitPos;
     R.sampleNormal = firstHitNormal;
-    R.radiance     = accumulated;
+    R.radiance     = accumulated;                      // raw L_o
     R.valid        = 1u;
-    R.wSum         = pHat;
+    R.wSum         = pHat / max(initPdf, 1e-8f);
     R.M            = 1u;
     FinalizeGIReservoir(R, pHat);
 
