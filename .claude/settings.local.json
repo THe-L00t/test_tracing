@@ -21,7 +21,11 @@
       "WebFetch(domain:meganr28.github.io)",
       "WebFetch(domain:cs.dartmouth.edu)",
       "WebFetch(domain:research.nvidia.com)",
-      "mcp__claude_ai_Notion__notion-update-page"
+      "mcp__claude_ai_Notion__notion-update-page",
+      "WebFetch(domain:agraphicsguynotes.com)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git commit *)"
     ]
   }
 }
