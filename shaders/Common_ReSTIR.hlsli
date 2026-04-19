@@ -411,12 +411,11 @@ void FinalizeGIReservoir(inout GIReservoir r, float pHat_selected)
     if (pHat_selected > 0.0f && r.M > 0u)
     {
         r.W = r.wSum / (float(r.M) * pHat_selected);
-        r.W = min(r.W, 2.0f);  // 안전 클램프
+        // W 클램프 제거: RTXDI 방식에서 W = 1/initPdf 는 의도적인 값.
+        // EvalBRDF_GI × L_o × W = f_r × NdotL × L_o / initPdf 는 BRDF 소거로 자연히 유계.
+        // Shade의 파이어플라이 클램프(luma > 3)가 극단값 처리.
 
-        // wSum 정규화: 다음 프레임 temporal merge의 w_b = pHat * W * M에서
-        // W가 clamp 값으로 고착되는 양성 피드백 루프를 끊는다.
-        // 수렴 분석: W_new = (1 + k*W_prev)/(k+1), k = temporalMaxM
-        // wSum 정규화 + M 클램프(k=5) → W → 1.0 수렴 (고정점: W=1)
+        // wSum 정규화: W 피드백 루프 방지 (M 클램프 k=5 와 함께 W → 수렴).
         r.wSum = float(r.M) * pHat_selected * r.W;
     }
     else
