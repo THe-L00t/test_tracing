@@ -823,7 +823,7 @@ void App::OnRender()
     if (m_accumDirty)
         m_shadeAccumCount = 0;
     else
-        m_shadeAccumCount = min(m_shadeAccumCount + 1u, 64u);  // alpha ≥ 1/65 로 동결 방지
+        m_shadeAccumCount = (m_shadeAccumCount < 64u) ? m_shadeAccumCount + 1u : 64u;  // alpha ≥ 1/65 로 동결 방지
 
     UpdateSceneCB();
 
