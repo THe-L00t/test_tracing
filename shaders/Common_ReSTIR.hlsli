@@ -407,12 +407,22 @@ void MergeGIReservoir(inout GIReservoir r_a, GIReservoir r_b,
 
 void FinalizeGIReservoir(inout GIReservoir r, float pHat_selected)
 {
-    // W = wSum / (M * p̂). 선택된 샘플의 p̂가 매우 작을 때 W가 폭발하는 것을 방지.
-    // radiance ≤ 3 (GI_Initial 클램프) × W ≤ 10 = 최대 indirectLight ≤ 30 → Reinhard에서 안전.
-    float rawW = (pHat_selected > 0.0f && r.M > 0u)
-        ? r.wSum / (float(r.M) * pHat_selected)
-        : 0.0f;
-    r.W = min(rawW, 10.0f);
+    if (pHat_selected > 0.0f && r.M > 0u)
+    {
+        r.W = r.wSum / (float(r.M) * pHat_selected);
+        r.W = min(r.W, 2.0f);  // 안전 클램프
+
+        // wSum 정규화: 다음 프레임 temporal merge의 w_b = pHat * W * M에서
+        // W가 clamp 값으로 고착되는 양성 피드백 루프를 끊는다.
+        // 수렴 분석: W_new = (1 + k*W_prev)/(k+1), k = temporalMaxM
+        // wSum 정규화 + M 클램프(k=5) → W → 1.0 수렴 (고정점: W=1)
+        r.wSum = float(r.M) * pHat_selected * r.W;
+    }
+    else
+    {
+        r.W    = 0.0f;
+        r.wSum = 0.0f;
+    }
 }
 
 // GI 공간 재사용 Jacobian (Ouyang 2021, Eq.1)

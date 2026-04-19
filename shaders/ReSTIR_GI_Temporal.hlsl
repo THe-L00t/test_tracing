@@ -93,8 +93,9 @@ void CS_GI_Temporal(uint3 tid : SV_DispatchThreadID)
 
     GIReservoir R_cur = gi_reservoir_cur[pidx];
 
-    // 첫 프레임: stale 데이터 차단
-    if (frameIndex == 0u)
+    // 카메라 이동 직후 2프레임: stale 데이터 완전 차단
+    // frameIndex=0: 이동 중, frameIndex=1~2: 정지 직후 첫 2프레임 (prev가 이동 시대 데이터)
+    if (frameIndex <= 2u)
     {
         if (R_cur.valid != 0u)
             FinalizeGIReservoir(R_cur, EvalGITargetPDF(R_cur.radiance));
@@ -102,14 +103,18 @@ void CS_GI_Temporal(uint3 tid : SV_DispatchThreadID)
         return;
     }
 
+    // GI 전용 M 클램프: DI temporalMaxM(20)보다 낮게 고정.
+    // 수렴 분석: W_new = (1 + k*W_prev)/(k+1), k=5 → W → 1 수렴.
+    static const float k_GI_temporalMaxM = 5.0f;
+
     int2 prevPx;
     if (Reproject(px, depth, N, prevPx))
     {
         uint        prevIdx = PixelIndex(uint2(prevPx), screenW);
         GIReservoir R_prev  = gi_reservoir_prev[prevIdx];
 
-        // M-클램프
-        R_prev.M = min(R_prev.M, uint(temporalMaxM * float(max(R_cur.M, 1u))));
+        // M-클램프 (GI 전용 낮은 값)
+        R_prev.M = min(R_prev.M, uint(k_GI_temporalMaxM * float(max(R_cur.M, 1u))));
 
         float pHat_prev = 0.0f;
         if (R_prev.valid != 0u)
