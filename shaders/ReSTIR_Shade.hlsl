@@ -219,32 +219,27 @@ void ClosestHit_Shade(inout IndirectPayload payload,
         return;
     }
 
-    // ── 유리/반투명: GGX 마이크로패싯 BTDF + Fresnel ───────────────
-    // Fresnel은 VdotH 기준 (grazing angle에서 NdotV보다 낮음 → 덜 반사 → 덜 회색)
-    // 반사 방향은 hemisphere clamp로 below-surface 오류 방지 (hollow 현상 수정)
+    // ── 유리/반투명: stochastic Fresnel (Schlick) + Beer-Lambert 흡수 ─
+    // Fresnel: 매크로 법선 N 기준 (물리적으로 정확한 dielectric BSDF)
+    // 흡수: entering 시 무흡수, exiting 시 경로 길이 기반 Beer-Lambert
+    //        → TIR 내부 반사 시 albedo^n 누적 오류 방지
     if (emissive < -0.5f)
     {
-        float  ior   = (emissive < -1.5f) ? 1.5f : 1.3f;
-        float  eta   = entering ? (1.0f / ior) : ior;
-        float  r0    = (1.0f - ior) / (1.0f + ior); r0 *= r0;
+        float  ior  = (emissive < -1.5f) ? 1.5f : 1.3f;
+        float  eta  = entering ? (1.0f / ior) : ior;
+        float  r0   = (1.0f - ior) / (1.0f + ior); r0 *= r0;
+        float  cosI = max(dot(N, V_hit), 0.0f);
+        float  fres = r0 + (1.0f - r0) * pow(1.0f - cosI, 5.0f);
+        float3 refr = refract(rayInc, N, eta);
+        bool   tir  = dot(refr, refr) < 0.0001f;
+        float3 sdir = (tir || RandFloat(seed) < fres) ? reflect(rayInc, N) : refr;
 
-        float  alpha = max(roughness * roughness, 0.001f);
-        float  VdotH;
-        float2 u2    = float2(RandFloat(seed), RandFloat(seed));
-        float3 H     = SampleGGX_VNDF(u2, alpha, V_hit, N, VdotH);
-
-        float  fres  = r0 + (1.0f - r0) * pow(1.0f - max(VdotH, 0.0f), 5.0f);
-        float3 refr  = refract(rayInc, H, eta);
-        bool   tir   = dot(refr, refr) < 0.0001f;
-
-        // 반사 방향이 매크로 법선 아래로 내려가면 N 기반 폴백 (below-hemisphere 방지)
-        float3 sdir_r = reflect(rayInc, H);
-        if (dot(sdir_r, N) < 0.001f) sdir_r = reflect(rayInc, N);
-
-        float3 sdir  = (tir || RandFloat(seed) < fres) ? sdir_r : refr;
+        float3 atten = entering
+            ? float3(1.0f, 1.0f, 1.0f)
+            : exp(-max(-log(max(albedo, 0.001f)), 0.0f) * RayTCurrent());
 
         payload.emission      = float3(0.0f, 0.0f, 0.0f);
-        payload.attenuation   = albedo;
+        payload.attenuation   = atten;
         payload.nextOrigin    = hitPos + sdir * 0.002f;
         payload.nextDirection = sdir;
         payload.scatterPdf    = 0.0f;
@@ -367,27 +362,16 @@ void RayGen_Shade()
     ir.TMin = 0.001f;
     ir.TMax = 1e6f;
 
-    if (flags > 0.5f && flags < 1.5f)  // GB_FLAG_GLASS: 굴절/반사가 첫 bounce
+    if (flags > 0.5f && flags < 1.5f)  // GB_FLAG_GLASS
     {
-        uint   matIdx0     = uint(normData.w + 0.5f);
-        float  emissiveVal = matEmissive[matIdx0];
-        float  ior  = (emissiveVal < -1.5f) ? 1.5f : 1.3f;
+        float  ior  = (matEmissive[uint(normData.w + 0.5f)] < -1.5f) ? 1.5f : 1.3f;
         float3 inc  = -V;
         float  r0   = (1.0f - ior) / (1.0f + ior); r0 *= r0;
-
-        float  alpha = max(roughness * roughness, 0.001f);
-        float  VdotH;
-        float2 u2    = float2(RandFloat(seed), RandFloat(seed));
-        float3 H     = SampleGGX_VNDF(u2, alpha, V, N, VdotH);
-
-        float  fres = r0 + (1.0f - r0) * pow(1.0f - max(VdotH, 0.0f), 5.0f);
-        float3 refr = refract(inc, H, 1.0f / ior);
+        float  cosI = max(dot(N, V), 0.0f);
+        float  fres = r0 + (1.0f - r0) * pow(1.0f - cosI, 5.0f);
+        float3 refr = refract(inc, N, 1.0f / ior);
         bool   tir  = dot(refr, refr) < 0.0001f;
-
-        float3 sdir_r = reflect(inc, H);
-        if (dot(sdir_r, N) < 0.001f) sdir_r = reflect(inc, N);  // below-hemisphere 방지
-
-        float3 sdir = (tir || RandFloat(seed) < fres) ? sdir_r : refr;
+        float3 sdir = (tir || RandFloat(seed) < fres) ? reflect(inc, N) : refr;
         ir.Origin    = hitPos + sdir * 0.002f;
         ir.Direction = sdir;
         throughput   = float3(1.0f, 1.0f, 1.0f);

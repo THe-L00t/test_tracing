@@ -313,8 +313,9 @@ float3 SampleBRDF(float3 N, float3 V,
     float  alpha2 = alpha * alpha;
     float  NdotV  = max(dot(N, V), 0.0001f);
     float3 F0     = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
-    float  pSpec  = metallic;
-    float  pDiff  = 1.0f - metallic;
+    // F0 luma 기반 specular 확률: non-metallic(F0=0.04)도 최소 4% specular 샘플링
+    float  pSpec  = clamp(max(dot(F0, float3(0.2126f, 0.7152f, 0.0722f)), metallic), 0.04f, 0.95f);
+    float  pDiff  = 1.0f - pSpec;
     float  G1v    = G1_Smith(NdotV, alpha2);
 
     float3 scatterDir;
