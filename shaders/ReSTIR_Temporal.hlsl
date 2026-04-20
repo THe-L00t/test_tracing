@@ -87,8 +87,9 @@ bool Reproject(uint2 px, float curDepth, float3 curN,
     // (Bitterli 2020 Sec.4.3: 이전 프레임 G-Buffer 사용이 논문 정석)
     float3 prevWPos  = prev_gbuf_worldPos[uint2(prevPx)].xyz;
     float3 prevN     = prev_gbuf_normal[uint2(prevPx)].xyz;
-    // 깊이 비교: 이전 프레임 월드 위치를 현재 카메라 forward로 투영해 선형 깊이 재계산
-    float  prevDepth = dot(prevWPos - _prevCam[0].xyz, _prevCam[3].xyz);
+    // 깊이 비교: 이전 프레임 월드 위치와 이전 카메라 사이의 유클리드 거리
+    // (curDepth = RayTCurrent() = 유클리드 거리이므로 단위 통일)
+    float  prevDepth = length(prevWPos - _prevCam[0].xyz);
 
     bool depthOk  = abs(prevDepth - curDepth) / max(curDepth, 1e-4f) < k_depthThreshold;
     bool normalOk = dot(prevN, curN) > k_normalThreshold;

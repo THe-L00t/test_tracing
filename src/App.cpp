@@ -822,7 +822,7 @@ void App::OnRender()
     if (m_accumDirty)
         m_shadeAccumCount = 0;
     else
-        m_shadeAccumCount++;
+        m_shadeAccumCount = std::min(m_shadeAccumCount + 1u, 64u);  // alpha≥1/65≈1.5% 보장
 
     UpdateSceneCB();
 

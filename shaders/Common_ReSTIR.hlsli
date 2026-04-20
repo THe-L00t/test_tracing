@@ -119,6 +119,7 @@ void FinalizeReservoir(inout Reservoir r, float pHat_selected)
     r.W = (pHat_selected > 0.0f)
         ? r.wSum / (float(r.M) * pHat_selected)
         : 0.0f;
+    r.W = min(r.W, 10.0f);  // W 폭발 방지: pHat≈0인 에지 케이스에서 Spatial 전파 억제
 }
 
 // ── LightData ────────────────────────────────────────────────
