@@ -219,17 +219,23 @@ void ClosestHit_Shade(inout IndirectPayload payload,
         return;
     }
 
-    // ── 유리/반투명: Fresnel 굴절·반사, delta 산란 ──────────────────
+    // ── 유리/반투명: GGX 마이크로패싯 BTDF + Fresnel (Walter 2007) ────
     if (emissive < -0.5f)
     {
-        float  ior  = (emissive < -1.5f) ? 1.5f : 1.3f;
-        float  eta  = entering ? (1.0f / ior) : ior;
-        float  cosT = max(dot(N, V_hit), 0.0f);
-        float  r0   = (1.0f - ior) / (1.0f + ior); r0 *= r0;
-        float  fres = r0 + (1.0f - r0) * pow(1.0f - cosT, 5.0f);
-        float3 refr = refract(rayInc, N, eta);
-        bool   tir  = dot(refr, refr) < 0.0001f;
-        float3 sdir = (tir || RandFloat(seed) < fres) ? reflect(rayInc, N) : refr;
+        float  ior   = (emissive < -1.5f) ? 1.5f : 1.3f;
+        float  eta   = entering ? (1.0f / ior) : ior;
+        float  r0    = (1.0f - ior) / (1.0f + ior); r0 *= r0;
+
+        // GGX 마이크로패싯 법선 샘플링 (roughness=0 → H≈N, roughness>0 → 산란)
+        float  alpha = max(roughness * roughness, 0.001f);
+        float  VdotH;
+        float2 u2    = float2(RandFloat(seed), RandFloat(seed));
+        float3 H     = SampleGGX_VNDF(u2, alpha, V_hit, N, VdotH);
+
+        float  fres  = r0 + (1.0f - r0) * pow(1.0f - max(VdotH, 0.0f), 5.0f);
+        float3 refr  = refract(rayInc, H, eta);
+        bool   tir   = dot(refr, refr) < 0.0001f;
+        float3 sdir  = (tir || RandFloat(seed) < fres) ? reflect(rayInc, H) : refr;
 
         payload.emission      = float3(0.0f, 0.0f, 0.0f);
         payload.attenuation   = albedo;
@@ -358,16 +364,22 @@ void RayGen_Shade()
     if (flags > 0.5f && flags < 1.5f)  // GB_FLAG_GLASS: 굴절/반사가 첫 bounce
     {
         // matIdx로 재질별 IOR 결정 (ClosestHit와 동일 로직)
-        uint   matIdx0 = uint(normData.w + 0.5f);
+        uint   matIdx0     = uint(normData.w + 0.5f);
         float  emissiveVal = matEmissive[matIdx0];
         float  ior  = (emissiveVal < -1.5f) ? 1.5f : 1.3f;
         float3 inc  = -V;
-        float  cosT = max(dot(N, V), 0.0f);
         float  r0   = (1.0f - ior) / (1.0f + ior); r0 *= r0;
-        float  fres = r0 + (1.0f - r0) * pow(1.0f - cosT, 5.0f);
-        float3 refr = refract(inc, N, 1.0f / ior);
+
+        // GGX 마이크로패싯 법선 샘플링 (1차 히트, roughness는 G-Buffer에서 읽음)
+        float  alpha = max(roughness * roughness, 0.001f);
+        float  VdotH;
+        float2 u2    = float2(RandFloat(seed), RandFloat(seed));
+        float3 H     = SampleGGX_VNDF(u2, alpha, V, N, VdotH);
+
+        float  fres = r0 + (1.0f - r0) * pow(1.0f - max(VdotH, 0.0f), 5.0f);
+        float3 refr = refract(inc, H, 1.0f / ior);
         bool   tir  = dot(refr, refr) < 0.0001f;
-        float3 sdir = (tir || RandFloat(seed) < fres) ? reflect(inc, N) : refr;
+        float3 sdir = (tir || RandFloat(seed) < fres) ? reflect(inc, H) : refr;
         ir.Origin    = hitPos + sdir * 0.002f;
         ir.Direction = sdir;
         throughput   = float3(1.0f, 1.0f, 1.0f);  // albedo는 ClosestHit exit에서 1회만 적용
