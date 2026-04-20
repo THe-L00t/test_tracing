@@ -357,7 +357,10 @@ void RayGen_Shade()
 
     if (flags > 0.5f && flags < 1.5f)  // GB_FLAG_GLASS: 굴절/반사가 첫 bounce
     {
-        float  ior  = 1.5f;
+        // matIdx로 재질별 IOR 결정 (ClosestHit와 동일 로직)
+        uint   matIdx0 = uint(normData.w + 0.5f);
+        float  emissiveVal = matEmissive[matIdx0];
+        float  ior  = (emissiveVal < -1.5f) ? 1.5f : 1.3f;
         float3 inc  = -V;
         float  cosT = max(dot(N, V), 0.0f);
         float  r0   = (1.0f - ior) / (1.0f + ior); r0 *= r0;
@@ -367,7 +370,7 @@ void RayGen_Shade()
         float3 sdir = (tir || RandFloat(seed) < fres) ? reflect(inc, N) : refr;
         ir.Origin    = hitPos + sdir * 0.002f;
         ir.Direction = sdir;
-        throughput   = albedo;
+        throughput   = float3(1.0f, 1.0f, 1.0f);  // albedo는 ClosestHit exit에서 1회만 적용
         hasFirstRay  = true;
     }
     else if (flags < 0.5f)  // GB_FLAG_NORMAL: BRDF 샘플링이 첫 bounce
