@@ -116,10 +116,16 @@ void MergeReservoir(inout Reservoir r_a, Reservoir r_b,
 //   이 W를 Shade에서 L = fr * Li * NdotL * vis * W 에 사용
 void FinalizeReservoir(inout Reservoir r, float pHat_selected)
 {
-    r.W = (pHat_selected > 0.0f)
-        ? r.wSum / (float(r.M) * pHat_selected)
-        : 0.0f;
-    r.W = min(r.W, 10.0f);  // W 폭발 방지: pHat≈0인 에지 케이스에서 Spatial 전파 억제
+    if (pHat_selected > 0.0f)
+    {
+        r.W    = min(r.wSum / (float(r.M) * pHat_selected), 10.0f);
+        r.wSum = float(r.M) * pHat_selected * r.W;  // W 클램핑 반영해 wSum 재설정: 다음 패스 누적 방지
+    }
+    else
+    {
+        r.W    = 0.0f;
+        r.wSum = 0.0f;
+    }
 }
 
 // ── LightData ────────────────────────────────────────────────

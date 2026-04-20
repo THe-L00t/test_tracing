@@ -1155,7 +1155,7 @@ void App::UpdateReSTIRCB()
     cb.screenW         = m_width;
     cb.screenH         = m_height;
     cb.frameIndex      = m_frameCount;
-    cb.temporalMaxM    = 30.0f;         // 고스팅 방지 M 클램프
+    cb.temporalMaxM    = 20.0f;         // 고스팅 방지 M 클램프 (Bitterli 2020 권장값)
     cb.spatialRadius   = 30u;           // 공간 재사용 반경 (픽셀)
     cb.spatialSamples  = 5u;            // 공간 이웃 샘플 수
 
