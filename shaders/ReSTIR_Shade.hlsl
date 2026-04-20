@@ -417,8 +417,8 @@ void RayGen_Shade()
     // ── Firefly 억제: 간접광 휘도 상한 클램핑 ────────────────────
     // 1spp 경로에서 가끔 발생하는 극단적 스파이크(firefly) 제거
     float indLum = dot(indirectLight, float3(0.2126f, 0.7152f, 0.0722f));
-    if (indLum > 2.5f)
-        indirectLight *= 2.5f / indLum;
+    if (indLum > 10.0f)
+        indirectLight *= 10.0f / indLum;
 
     // ── 시간적 누적 → Reinhard 톤매핑 → gamma 보정 ───────────────
     // randomSeed = App::m_shadeAccumCount
