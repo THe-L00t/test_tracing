@@ -709,12 +709,12 @@ void App::UpdateSceneCB()
         // ── 씬 2 (투명/반투명 구 쇼케이스): 포인트 라이트 2개 ──
         // Light 1: 왼쪽 위
         cb.lightPos[0]=-1.5f; cb.lightPos[1]=3.6f; cb.lightPos[2]=0.0f;
-        cb.lightIntensity=7.0f;
+        cb.lightIntensity=8.4f;
         cb.lightColor[0]=1.0f; cb.lightColor[1]=1.0f; cb.lightColor[2]=1.0f;
 
         // Light 2: 오른쪽 위
         cb.light2Pos[0]=1.5f; cb.light2Pos[1]=3.6f; cb.light2Pos[2]=-1.5f;
-        cb.light2Intensity=5.5f;
+        cb.light2Intensity=6.6f;
         cb.light2Color[0]=1.0f; cb.light2Color[1]=1.0f; cb.light2Color[2]=1.0f;
 
         // mat0: 방 벽/바닥/천장 – 흰색
@@ -1112,14 +1112,14 @@ std::vector<LightData> App::BuildLightList(uint32_t sceneID) const
     {
         // 씬 2 (구 쇼케이스): 포인트 라이트 2개
         ld.pos[0] = -1.5f; ld.pos[1] = 3.6f; ld.pos[2] = 0.0f;
-        ld.intensity = 7.0f;
+        ld.intensity = 8.4f;
         ld.color[0] = 1.0f; ld.color[1] = 1.0f; ld.color[2] = 1.0f;
         ld.type = 0u;
         lights.push_back(ld);
 
         LightData ld2{};
         ld2.pos[0] = 1.5f; ld2.pos[1] = 3.6f; ld2.pos[2] = -1.5f;
-        ld2.intensity = 5.5f;
+        ld2.intensity = 6.6f;
         ld2.color[0] = 1.0f; ld2.color[1] = 1.0f; ld2.color[2] = 1.0f;
         ld2.type = 0u;
         lights.push_back(ld2);
