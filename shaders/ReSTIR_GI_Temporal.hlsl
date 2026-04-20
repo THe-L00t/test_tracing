@@ -70,7 +70,7 @@ bool Reproject(uint2 px, float curDepth, float3 curN, out int2 prevPx)
 
     float3 prevWPos  = prev_gbuf_worldPos[uint2(prevPx)].xyz;
     float3 prevN     = prev_gbuf_normal[uint2(prevPx)].xyz;
-    float  prevDepth = dot(prevWPos - _prevCam[0].xyz, _prevCam[3].xyz);
+    float  prevDepth = length(prevWPos - _prevCam[0].xyz);
 
     bool depthOk  = abs(prevDepth - curDepth) / max(curDepth, 1e-4f) < k_depthThreshold;
     bool normalOk = dot(prevN, curN) > k_normalThreshold;

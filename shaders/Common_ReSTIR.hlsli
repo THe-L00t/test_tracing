@@ -119,6 +119,7 @@ void FinalizeReservoir(inout Reservoir r, float pHat_selected)
     r.W = (pHat_selected > 0.0f)
         ? r.wSum / (float(r.M) * pHat_selected)
         : 0.0f;
+    r.W = min(r.W, 10.0f);  // W 폭발 방지: pHat≈0인 에지 케이스에서 Spatial 전파 억제
 }
 
 // ── LightData ────────────────────────────────────────────────
@@ -411,12 +412,7 @@ void FinalizeGIReservoir(inout GIReservoir r, float pHat_selected)
     if (pHat_selected > 0.0f && r.M > 0u)
     {
         r.W = r.wSum / (float(r.M) * pHat_selected);
-        // W 클램프 제거: RTXDI 방식에서 W = 1/initPdf 는 의도적인 값.
-        // EvalBRDF_GI × L_o × W = f_r × NdotL × L_o / initPdf 는 BRDF 소거로 자연히 유계.
-        // Shade의 파이어플라이 클램프(luma > 3)가 극단값 처리.
-
-        // wSum 정규화: W 피드백 루프 방지 (M 클램프 k=5 와 함께 W → 수렴).
-        r.wSum = float(r.M) * pHat_selected * r.W;
+        r.W = min(r.W, 10.0f);  // pHat≈0 에지 케이스에서 W 폭발 방지 (diffuse 이론치 ≈ π)
     }
     else
     {
