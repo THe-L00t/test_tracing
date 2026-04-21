@@ -496,7 +496,7 @@ void App::SwitchScene(uint32_t id)
             0.7f, 0.7f, 0.7f, -0.5f, 0.7f, 0.5f);
         instances[2].blasResource = m_sphereBLAS.Resource();
         instances[2].instanceID   = EncodeID(3, 2);
-        instances[2].mask         = 0xFF; // 그림자 캐스팅 (반투명)
+        instances[2].mask         = 0x02; // 그림자 레이 제외 (유리계열)
 
         // 투명 유리 구 (mat3) – 오른쪽, 반지름 0.8
         // geomType=3 (sphere), matIdx=3
@@ -717,9 +717,9 @@ void App::UpdateSceneCB()
         cb.light2Intensity=6.6f;
         cb.light2Color[0]=1.0f; cb.light2Color[1]=1.0f; cb.light2Color[2]=1.0f;
 
-        // mat0: 방 벽/바닥/천장 – 흰색
-        cb.matAlbedoRoughness[0][0]=0.85f; cb.matAlbedoRoughness[0][1]=0.85f;
-        cb.matAlbedoRoughness[0][2]=0.85f; cb.matAlbedoRoughness[0][3]=0.90f;
+        // mat0: 방 벽/바닥/천장 – 따뜻한 크림색 (굴절 이미지 구분 가시성 확보)
+        cb.matAlbedoRoughness[0][0]=0.92f; cb.matAlbedoRoughness[0][1]=0.80f;
+        cb.matAlbedoRoughness[0][2]=0.65f; cb.matAlbedoRoughness[0][3]=0.90f;
         cb.matMetallic[0] = 0.0f;
         cb.matEmissive[0] = 0.0f;
 
