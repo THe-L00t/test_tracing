@@ -504,10 +504,11 @@ void App::SwitchScene(uint32_t id)
         instances[3].instanceID   = EncodeID(3, 3);
         instances[3].mask         = 0x02;
 
-        // 굴절 확인용 골드 패널 – 유리 구 바로 뒤 (렌즈 효과 가시화)
-        // 유리 구를 통해 보면 반전·왜곡된 금색 이미지가 보여야 함
+        // 굴절 확인용 골드 벽 패널 – 후면 벽 근처에 크게 배치
+        // 카메라(0,1.8,-2.5)→구(0.9,0.8,0.3) 방향으로 굴절된 레이는
+        // z=2.8에서 약 (1.7, -0.1) 부근에 도달하므로 패널을 크고 넓게 배치
         MakeScaleTranslateTransform(instances[4].transform,
-            0.6f, 0.6f, 0.1f, 0.9f, 0.8f, 1.6f);
+            3.0f, 3.0f, 0.1f, 1.2f, 0.5f, 2.8f);
         instances[4].blasResource = m_cubeBLAS.Resource();
         instances[4].instanceID   = EncodeID(1, 1); // mat1 (금색)
         instances[4].mask         = 0xFF;
