@@ -475,9 +475,9 @@ void App::SwitchScene(uint32_t id)
         std::println("[App] 씬 2 (구 쇼케이스) 전환");
         m_camera.Init(0.0f, 1.8f, -2.5f, 0.0f, 0.05f);
 
-        TLASInstance instances[4]{};
+        TLASInstance instances[5]{};
 
-        // 방 (mat0 = 흰색 벽)
+        // 방 (mat0 = 크림색 벽)
         MakeIdentityTransform(instances[0].transform);
         instances[0].blasResource = m_roomBLAS.Resource();
         instances[0].instanceID   = EncodeID(2, 0);
@@ -491,20 +491,26 @@ void App::SwitchScene(uint32_t id)
         instances[1].mask         = 0xFF;
 
         // 반투명 구 (mat2) – 왼쪽 중앙, 반지름 0.7
-        // geomType=3 (sphere), matIdx=2
         MakeScaleTranslateTransform(instances[2].transform,
             0.7f, 0.7f, 0.7f, -0.5f, 0.7f, 0.5f);
         instances[2].blasResource = m_sphereBLAS.Resource();
         instances[2].instanceID   = EncodeID(3, 2);
-        instances[2].mask         = 0x02; // 그림자 레이 제외 (유리계열)
+        instances[2].mask         = 0x02;
 
         // 투명 유리 구 (mat3) – 오른쪽, 반지름 0.8
-        // geomType=3 (sphere), matIdx=3
         MakeScaleTranslateTransform(instances[3].transform,
             0.8f, 0.8f, 0.8f, 0.9f, 0.8f, 0.3f);
         instances[3].blasResource = m_sphereBLAS.Resource();
         instances[3].instanceID   = EncodeID(3, 3);
-        instances[3].mask         = 0x02; // 그림자 레이 제외 (유리)
+        instances[3].mask         = 0x02;
+
+        // 굴절 확인용 골드 패널 – 유리 구 바로 뒤 (렌즈 효과 가시화)
+        // 유리 구를 통해 보면 반전·왜곡된 금색 이미지가 보여야 함
+        MakeScaleTranslateTransform(instances[4].transform,
+            0.6f, 0.6f, 0.1f, 0.9f, 0.8f, 1.6f);
+        instances[4].blasResource = m_cubeBLAS.Resource();
+        instances[4].instanceID   = EncodeID(1, 1); // mat1 (금색)
+        instances[4].mask         = 0xFF;
 
         m_tlas.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ instances });
