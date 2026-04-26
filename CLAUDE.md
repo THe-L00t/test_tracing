@@ -8,15 +8,16 @@
 
 ## 렌더링 기능
 
-1. **경로 추적 (Path Tracing)** — GGX BRDF + MIS
-2. **A-trous 디노이저** — D키 런타임 토글
-3. **ReSTIR DI** (`feature/restir` 브랜치, 진행 중) — R키 토글, Bitterli 2020 기반
+1. **경로 추적 (Path Tracing)** — GGX BRDF + MIS (8-bounce, NEE, Glass/TIR)
+2. **A-trous 디노이저** — F키 런타임 토글
+3. **ReSTIR DI** (`pure-restir-di` 브랜치) — GBuffer 5패스 파이프라인
+4. **Fresnel-Guided Perceptual Sampling** (`feature/fresnel-guided-pt`, 논문 연구 브랜치)
 
 ## 씬
 
 - `1` Outdoor / `2` Indoor / `3` PBR Showcase (투명·반투명 구)
 
-## ReSTIR 패스 순서
+## ReSTIR 패스 순서 (pure-restir-di 전용)
 
 `GBuffer → Initial RIS → Temporal Reuse → Spatial Reuse → Shade`
 
@@ -24,15 +25,24 @@
 
 # 브랜치 구성
 
-앞으로 기능이 추가될수록 브랜치가 확장될 수 있다.
+| 브랜치 | 용도 | 상태 |
+|---|---|---|
+| `master` | 안정 버전. 검증된 기능만 머지 | 유지 |
+| `feature/pbr-path-tracing` | GGX BRDF + MIS 경로 추적, A-trous 디노이저 | 완료 |
+| `pure-restir-di` | ReSTIR DI 단독 구현 (GBuffer 5패스) | 완료 |
+| `pure-restir-gi` | ReSTIR GI 구현 | 완료 |
+| `feature/fresnel-guided-pt` | **논문 연구 브랜치** — Fresnel Prior 기반 adaptive sampling | **진행 중** |
+| `중앙-포커스-샘플링` | 가우시안 분포 기반 중앙 포커스 샘플링 실험 | 실험 완료 |
 
-| 브랜치 | 용도 |
-|---|---|
-| `master` | 안정 버전. 검증된 기능만 머지 |
-| `feature/pbr-path-tracing` | GGX BRDF + MIS 경로 추적, A-trous 디노이저 |
-| `feature/restir` | ReSTIR DI 구현 (현재 작업 브랜치) |
-| `중앙-포커스-샘플링` | 가우시안 확률 분포 기반 중앙 포커스 샘플링 실험 |
-| *(추가 예정)* | 새 기능·실험은 별도 브랜치로 분리하여 개발 |
+## ⚠️ feature/fresnel-guided-pt 브랜치 주의사항
+
+- **base**: `feature/pbr-path-tracing` 에서 분기 (`pure-restir-di` 아님)
+- **이유**: pure-restir-di는 ReSTIR 토글이 없어 Pure PT baseline 측정 불가
+- **분기 명령**:
+  ```bash
+  git checkout feature/pbr-path-tracing
+  git checkout -b feature/fresnel-guided-pt
+  ```
 
 ---
 
@@ -71,7 +81,7 @@ C:\Users\sigun\.claude\projects\C--Users-sigun-University------test-tracing\memo
 
 ## 5. 진행 상황 파일 갱신
 
-작업을 진행할 때마다 `project_restir.md`를 최신 상태로 갱신한다:
+작업을 진행할 때마다 `project_progress.md`를 최신 상태로 갱신한다:
 
 - 완료된 항목은 "구현 완료" 섹션으로 이동
 - 새로운 버그·이슈 발견 시 "남은 작업"에 추가
