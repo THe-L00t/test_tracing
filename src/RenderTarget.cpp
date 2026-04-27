@@ -149,6 +149,33 @@ void RenderTarget::Init(ID3D12Device* device, DescriptorHeap& heap,
         device->CreateUnorderedAccessView(
             m_normal.Get(), nullptr, &uavDesc, m_normalHandle.cpu);
     }
+
+    // ── 슬롯 5: g_accumSq (R32F, 휘도² 누적 평균) ──
+    {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = width;
+        desc.Height           = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_R32_FLOAT;
+        desc.SampleDesc       = {1, 0};
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        ThrowIfFailed(device->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE,
+            &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            nullptr, IID_PPV_ARGS(&m_accumSq)));
+
+        m_accumSqHandle = heap.Allocate();
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uavDesc.Format        = DXGI_FORMAT_R32_FLOAT;
+        device->CreateUnorderedAccessView(
+            m_accumSq.Get(), nullptr, &uavDesc, m_accumSqHandle.cpu);
+    }
 }
 
 void RenderTarget::ClearAccumulation(ID3D12GraphicsCommandList* cmdList)
@@ -169,7 +196,7 @@ void RenderTarget::ClearAccumulation(ID3D12GraphicsCommandList* cmdList)
 
 void RenderTarget::UAVBarriers(ID3D12GraphicsCommandList* cmdList)
 {
-    D3D12_RESOURCE_BARRIER barriers[5]{};
+    D3D12_RESOURCE_BARRIER barriers[6]{};
     barriers[0].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barriers[0].UAV.pResource = m_texture.Get();
     barriers[1].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -180,7 +207,9 @@ void RenderTarget::UAVBarriers(ID3D12GraphicsCommandList* cmdList)
     barriers[3].UAV.pResource = m_depth.Get();
     barriers[4].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barriers[4].UAV.pResource = m_normal.Get();
-    cmdList->ResourceBarrier(5, barriers);
+    barriers[5].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barriers[5].UAV.pResource = m_accumSq.Get();
+    cmdList->ResourceBarrier(6, barriers);
 }
 
 void RenderTarget::TransitionTo(ID3D12GraphicsCommandList* cmdList,

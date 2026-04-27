@@ -332,11 +332,12 @@ void App::BuildBLASes()
 // 슬롯 2: UAV u2 (g_fresnel,      R32F    – RenderTarget::Init 내부)
 // 슬롯 3: UAV u3 (g_depth,        R32F    – RenderTarget::Init 내부)
 // 슬롯 4: UAV u4 (g_normal,       RGBA32F – RenderTarget::Init 내부)
-// 슬롯 5: SRV t0 (TLAS)
-// 슬롯 6: SRV t1 (plane VB)
-// 슬롯 7: SRV t2 (cube VB)
-// 슬롯 8: SRV t3 (room VB)
-// 슬롯 9: SRV t4 (sphere VB)
+// 슬롯 5: UAV u5 (g_accumSq,      R32F    – RenderTarget::Init 내부)
+// 슬롯 6: SRV t0 (TLAS)
+// 슬롯 7: SRV t1 (plane VB)
+// 슬롯 8: SRV t2 (cube VB)
+// 슬롯 9: SRV t3 (room VB)
+// 슬롯 10: SRV t4 (sphere VB)
 // ---------------------------------------------------------------
 void App::BuildDescriptors()
 {
@@ -346,7 +347,7 @@ void App::BuildDescriptors()
     // 슬롯 0~4: UAV (렌더 타겟 + GBuffer)
     m_renderTarget.Init(device, heap, m_width, m_height);
 
-    // 슬롯 5: SRV (TLAS)  ← 슬롯 0..4는 RenderTarget::Init에서 UAV로 사용
+    // 슬롯 6: SRV (TLAS)  ← 슬롯 0..5는 RenderTarget::Init에서 UAV로 사용
     m_tlasSRV = heap.Allocate();
     RebuildTLASSRV();
 

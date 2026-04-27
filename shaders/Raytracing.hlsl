@@ -26,6 +26,7 @@ RWTexture2D<float4>             g_accumulation : register(u1);
 RWTexture2D<float>              g_fresnel      : register(u2);  // Fresnel 우선도 맵 F(p)
 RWTexture2D<float>              g_depth        : register(u3);  // GBuffer: 1차 레이 히트 거리
 RWTexture2D<float4>             g_normal       : register(u4);  // GBuffer: 표면 법선 (N*0.5+0.5)
+RWTexture2D<float>              g_accumSq      : register(u5);  // 휘도² 누적 평균 (분산 계산용)
 RaytracingAccelerationStructure g_tlas         : register(t0);
 
 struct VertexPN { float3 pos; float3 normal; };
@@ -508,15 +509,28 @@ void RayGen()
     }
 
     // 시간적 누적 (프레임당 1spp)
-    float3 prevAccum = g_accumulation[idx].rgb;  // 분산 계산용 이전 누적 평균
+    float3 prevAccum   = g_accumulation[idx].rgb;
+    float  prevAccumSq = g_accumSq[idx];
+
+    static const float3 k_lum = float3(0.299f, 0.587f, 0.114f);
+    float lumNew = dot(radiance, k_lum);
 
     float3 accumulated;
+    float  accumulatedSq;
     if (frameCount == 0u)
-        accumulated = radiance;
+    {
+        accumulated   = radiance;
+        accumulatedSq = lumNew * lumNew;
+    }
     else
-        accumulated = lerp(prevAccum, radiance, 1.0f / float(frameCount + 1u));
+    {
+        float w       = 1.0f / float(frameCount + 1u);
+        accumulated   = lerp(prevAccum,   radiance,        w);
+        accumulatedSq = lerp(prevAccumSq, lumNew * lumNew, w);
+    }
 
     g_accumulation[idx] = float4(accumulated, 1.0f);
+    g_accumSq[idx]      = accumulatedSq;
 
     // g_output 출력 (debugMode에 따라 분기)
     if (debugMode == 1u)
@@ -527,10 +541,10 @@ void RayGen()
     }
     else if (debugMode == 2u)
     {
-        // 시간적 분산 프록시: |현재 샘플 휘도 - 누적 평균 휘도|
-        float lumNew = dot(radiance,  float3(0.299f, 0.587f, 0.114f));
-        float lumOld = dot(prevAccum, float3(0.299f, 0.587f, 0.114f));
-        float v      = saturate(abs(lumNew - lumOld) * 3.0f);
+        // 통계적 분산: E[X²] - E[X]²  (수렴할수록 정확)
+        float lumMean = dot(accumulated, k_lum);
+        float variance = max(accumulatedSq - lumMean * lumMean, 0.0f);
+        float v = saturate(sqrt(variance) * 4.0f);
         g_output[idx] = float4(v, v, v, 1.0f);
     }
     else if (debugMode == 3u)

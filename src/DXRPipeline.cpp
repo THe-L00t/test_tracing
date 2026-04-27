@@ -74,7 +74,8 @@ namespace
 //   힙 슬롯 2: UAV u2 (g_fresnel,      R32F)
 //   힙 슬롯 3: UAV u3 (g_depth,        R32F)
 //   힙 슬롯 4: UAV u4 (g_normal,       RGBA32F)
-//   힙 슬롯 5: SRV t0 (TLAS)
+//   힙 슬롯 5: UAV u5 (g_accumSq,      R32F)
+//   힙 슬롯 6: SRV t0 (TLAS)
 //   힙 슬롯 6: SRV t1 (plane VB)
 //   힙 슬롯 7: SRV t2 (cube VB)
 //   힙 슬롯 8: SRV t3 (room VB)
@@ -84,12 +85,12 @@ namespace
 ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
 {
     // 파라미터 0: 디스크립터 테이블
-    //   Range 0: UAV 5개 (u0..u4) - 출력 + 누적 + Fresnel + Depth + Normal
+    //   Range 0: UAV 6개 (u0..u5) - 출력 + 누적 + Fresnel + Depth + Normal + AccumSq
     //   Range 1: SRV 5개 (t0..t4) - TLAS + VB 4개
     D3D12_DESCRIPTOR_RANGE1 ranges[2]{};
 
     ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    ranges[0].NumDescriptors                    = 5;   // u0..u4
+    ranges[0].NumDescriptors                    = 6;   // u0..u5
     ranges[0].BaseShaderRegister                = 0;
     ranges[0].RegisterSpace                     = 0;
     ranges[0].OffsetInDescriptorsFromTableStart = 0;
@@ -99,7 +100,7 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[1].NumDescriptors                    = 5;   // t0(TLAS) + t1(plane) + t2(cube) + t3(room) + t4(sphere)
     ranges[1].BaseShaderRegister                = 0;
     ranges[1].RegisterSpace                     = 0;
-    ranges[1].OffsetInDescriptorsFromTableStart = 5;   // 힙 슬롯 5부터 (UAV 5개 다음)
+    ranges[1].OffsetInDescriptorsFromTableStart = 6;   // 힙 슬롯 6부터 (UAV 6개 다음)
     ranges[1].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     D3D12_ROOT_PARAMETER1 params[2]{};

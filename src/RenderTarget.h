@@ -3,11 +3,12 @@
 #include "DescriptorHeap.h"
 
 // 레이트레이싱 출력 버퍼
-//   슬롯 0: RGBA8   표시용        (g_output,       u0)
-//   슬롯 1: RGBA32F HDR 누적      (g_accumulation, u1)
-//   슬롯 2: R32F    Fresnel 맵    (g_fresnel,      u2)
-//   슬롯 3: R32F    GBuffer 깊이  (g_depth,        u3)
-//   슬롯 4: RGBA32F GBuffer 법선  (g_normal,       u4)
+//   슬롯 0: RGBA8   표시용           (g_output,       u0)
+//   슬롯 1: RGBA32F HDR 누적         (g_accumulation, u1)
+//   슬롯 2: R32F    Fresnel 맵       (g_fresnel,      u2)
+//   슬롯 3: R32F    GBuffer 깊이     (g_depth,        u3)
+//   슬롯 4: RGBA32F GBuffer 법선     (g_normal,       u4)
+//   슬롯 5: R32F    휘도² 누적 평균  (g_accumSq,      u5)
 class RenderTarget
 {
 public:
@@ -32,6 +33,7 @@ public:
     ID3D12Resource* FresnelResource() const noexcept { return m_fresnel.Get(); }
     ID3D12Resource* DepthResource()   const noexcept { return m_depth.Get(); }
     ID3D12Resource* NormalResource()  const noexcept { return m_normal.Get(); }
+    ID3D12Resource* AccumSqResource() const noexcept { return m_accumSq.Get(); }
 
 private:
     // 슬롯 0: g_output  (RGBA8,   표시 및 톤맵 결과)
@@ -54,6 +56,10 @@ private:
     // 슬롯 4: g_normal  (RGBA32F, 1차 레이 표면 법선 N*0.5+0.5)
     ComPtr<ID3D12Resource> m_normal;
     DescriptorHandle       m_normalHandle;
+
+    // 슬롯 5: g_accumSq  (R32F, 휘도² 누적 평균 — 분산 계산용)
+    ComPtr<ID3D12Resource> m_accumSq;
+    DescriptorHandle       m_accumSqHandle;
 
     // ClearUnorderedAccessViewFloat용 non-shader-visible CPU 핸들
     DescriptorHeap              m_clearHeap;
