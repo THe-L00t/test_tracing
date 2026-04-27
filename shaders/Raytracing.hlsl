@@ -512,7 +512,7 @@ float3 TracePath(uint2 idx, uint2 dim, inout uint seed)
 float3 TemporalDisplay(float3 accumulated, float3 prevAccum, uint fc)
 {
     if (fc == 0u) return accumulated;
-    return lerp(prevAccum, accumulated, 0.15f);
+    return lerp(prevAccum, accumulated, 0.005f);
 }
 
 // debugMode 인코딩: 하위 8비트 = actualMode(0~5), 비트8 = passIndex(0/1)

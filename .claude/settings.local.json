@@ -3,7 +3,14 @@
     "allow": [
       "Bash(gh auth:*)",
       "Bash(export PATH=\"$PATH:/c/Program Files/GitHub CLI\")",
-      "Bash(gh repo:*)"
+      "Bash(gh repo:*)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(del *)",
+      "mcp__claude_ai_Notion__notion-search",
+      "mcp__claude_ai_Notion__notion-fetch",
+      "mcp__claude_ai_Notion__notion-create-pages",
+      "Bash(python compare.py --gt screenshot_fresnel_10000spp.bmp --a screenshot_baseline_00100spp.bmp --b screenshot_fresnel_00100spp.bmp)"
     ]
   }
 }

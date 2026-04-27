@@ -19,7 +19,11 @@ Fresnel-Guided PT 연구용
 
 import argparse
 import sys
+import io
 import numpy as np
+
+# Windows 콘솔 UTF-8 출력
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 from pathlib import Path
 from PIL import Image
 
