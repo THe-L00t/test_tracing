@@ -104,9 +104,9 @@ struct alignas(16) SceneCB
     uint32_t frameCount;
     uint32_t randomSeed;
     float    emissBoxHalfSize;    // 발광 박스 반크기 (0=없음)
-    float    _cbPad1;
+    float    fresnelThreshold;    // F(p) 임계값 (mode 5 Threshold mask, Pass2 픽셀 선택)
     float    emissBoxCenter[3];   // 발광 박스 중심
-    uint32_t debugMode;           // 0=PT, 1=Fresnel map
+    uint32_t debugMode;           // 0=PT,1=Fresnel,2=Var,3=DepthEdge,4=NormalEdge,5=ThresholdMask
 };
 // 검증: 64+32+32+64+16+16+16+16 = 256
 static_assert(sizeof(SceneCB) == 256, "SceneCB must be 256 bytes");

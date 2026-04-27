@@ -51,8 +51,8 @@ cbuffer SceneConstants : register(b0)
     float4 matMetallic;             // .xyzw = metallic per mat
     float4 matEmissive;             // .xyzw = emissive signal
 
-    uint   frameCount;  uint   randomSeed;  float  emissBoxHalfSize; float _cbPad1;
-    float3 emissBoxCenter;  uint  debugMode;   // 0=PT, 1=Fresnel map 시각화
+    uint   frameCount;  uint   randomSeed;  float  emissBoxHalfSize; float fresnelThreshold;
+    float3 emissBoxCenter;  uint  debugMode;   // 0=PT,1=Fresnel,2=Var,3=DepthEdge,4=NormalEdge,5=ThresholdMask
 }
 
 // ── 상수 ────────────────────────────────────────────────────────
@@ -563,6 +563,16 @@ void RayGen()
         // Normal edge (법선 각도 차, 1프레임 지연)
         float v = NormalSobel(idx, dim);
         g_output[idx] = float4(v, v, v, 1.0f);
+    }
+    else if (debugMode == 5u)
+    {
+        // Threshold mask: PT 출력 위에 F(p) > threshold 픽셀을 붉게 강조
+        float3 color = accumulated / (accumulated + 1.0f);
+        color = pow(max(color, 0.0f), 1.0f / 2.2f);
+        float fp = g_fresnel[idx];
+        if (fp > fresnelThreshold)
+            color = lerp(color, float3(1.0f, 0.15f, 0.0f), 0.75f);
+        g_output[idx] = float4(color, 1.0f);
     }
     else
     {

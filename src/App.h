@@ -78,8 +78,9 @@ private:
     bool     m_accumDirty   = true;  // 씬 전환/디노이저 토글 시 누적 버퍼 클리어 필요
 
     // 연구용 디버그 모드 (V키 순환)
-    // 0=PT 표준 출력, 1=Fresnel 우선도 맵 시각화
-    uint32_t m_debugMode    = 0;
+    // 0=PT, 1=Fresnel, 2=Var, 3=DepthEdge, 4=NormalEdge, 5=ThresholdMask
+    uint32_t m_debugMode         = 0;
+    float    m_fresnelThreshold  = 0.10f;  // [/] 키로 ±0.05 조정
 
     // 마우스 캡처
     HWND     m_hwnd          = nullptr;

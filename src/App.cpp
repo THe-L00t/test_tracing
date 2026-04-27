@@ -719,9 +719,10 @@ void App::UpdateSceneCB()
     }
 
     // 패스 트레이싱 누적 파라미터
-    cb.frameCount  = m_frameCount;
-    cb.randomSeed  = m_frameCount;  // 프레임마다 달라지는 시드
-    cb.debugMode   = m_debugMode;
+    cb.frameCount        = m_frameCount;
+    cb.randomSeed        = m_frameCount;  // 프레임마다 달라지는 시드
+    cb.debugMode         = m_debugMode;
+    cb.fresnelThreshold  = m_fresnelThreshold;
 
     // 업로드 버퍼에 직접 기록
     void* mapped = nullptr;
@@ -750,11 +751,21 @@ void App::OnKeyDown(uint32_t key)
     }
     else if (key == 'V')
     {
-        m_debugMode = (m_debugMode + 1u) % 5u;
+        m_debugMode = (m_debugMode + 1u) % 6u;
         static constexpr const char* k_names[] = {
-            "PT (표준)", "Fresnel map", "Variance", "Depth edge", "Normal edge"
+            "PT (표준)", "Fresnel map", "Variance", "Depth edge", "Normal edge", "Threshold mask"
         };
         std::println("[App] debugMode → {} ({})", m_debugMode, k_names[m_debugMode]);
+    }
+    else if (key == VK_OEM_4)  // '[' — 임계값 낮추기
+    {
+        m_fresnelThreshold = std::max(0.01f, m_fresnelThreshold - 0.05f);
+        std::println("[App] fresnelThreshold → {:.2f}", m_fresnelThreshold);
+    }
+    else if (key == VK_OEM_6)  // ']' — 임계값 높이기
+    {
+        m_fresnelThreshold = std::min(1.00f, m_fresnelThreshold + 0.05f);
+        std::println("[App] fresnelThreshold → {:.2f}", m_fresnelThreshold);
     }
 }
 
