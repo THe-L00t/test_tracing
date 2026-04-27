@@ -627,9 +627,11 @@ void App::SwitchScene(uint32_t id)
         instances[1].instanceID   = EncodeID(1, 1);
         instances[1].mask         = 0xFF;
 
-        // 유리 판 (mat2 = glass, 세로로 세운 얇은 판)
+        // 유리 판 (mat2 = glass, 카메라 정면 향 — 골드 구 오른쪽 절반 가림)
+        // 카메라(0,1.5,-2.8) 기준 구(x=-0.9)가 왼쪽에 보이므로
+        // 판을 x=-0.1, z=0.15(구 앞)에 두면 판 왼쪽(-0.7)이 구 우측 실루엣과 겹침
         MakeScaleTranslateTransform(instances[2].transform,
-            0.05f, 1.8f, 1.6f,  0.4f, 0.9f, 0.6f);
+            1.2f, 1.8f, 0.06f,  -0.1f, 0.9f, 0.15f);
         instances[2].blasResource = m_cubeBLAS.Resource();
         instances[2].instanceID   = EncodeID(1, 2);
         instances[2].mask         = 0x02; // 유리 — 그림자 레이 제외
