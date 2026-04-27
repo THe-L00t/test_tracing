@@ -58,6 +58,7 @@ private:
 
     // 씬 상수 버퍼 (업로드 힙, 256바이트, 매 프레임 기록)
     ComPtr<ID3D12Resource> m_sceneCB;
+    ComPtr<ID3D12Resource> m_sceneCBPass2;  // Pass2 전용 (debugMode 비트8=1 설정)
 
     // 카메라
     Camera   m_camera;

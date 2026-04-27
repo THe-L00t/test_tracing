@@ -444,16 +444,9 @@ float NormalSobel(uint2 c, uint2 dim)
     return saturate(maxDiff * 4.0f);
 }
 
-// ── RayGen – 균일 1spp 패스 트레이싱 ───────────────────────────
-[shader("raygeneration")]
-void RayGen()
+// ── TracePath: 단일 경로 추적 (RayGen/Pass2 공유) ──────────────
+float3 TracePath(uint2 idx, uint2 dim, inout uint seed)
 {
-    uint2 idx = DispatchRaysIndex().xy;
-    uint2 dim = DispatchRaysDimensions().xy;
-
-    uint seed = WangHash(idx.x + idx.y * dim.x + randomSeed * 719393u);
-
-    // 서브픽셀 지터 (안티에일리어싱)
     float2 jitter = float2(RandFloat(seed), RandFloat(seed)) - 0.5f;
     float2 uv     = ((float2)idx + 0.5f + jitter) / (float2)dim;
     float2 ndc    = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
@@ -494,7 +487,6 @@ void RayGen()
 
         throughput *= payload.attenuation;
 
-        // Russian Roulette (bounce 3부터)
         if (bounce >= 3u)
         {
             float rrProb = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.01f, 1.0f);
@@ -507,13 +499,61 @@ void RayGen()
         ray.TMin      = 0.001f;
         ray.TMax      = 1e6f;
     }
+    return radiance;
+}
 
-    // 시간적 누적 (프레임당 1spp)
-    float3 prevAccum   = g_accumulation[idx].rgb;
-    float  prevAccumSq = g_accumSq[idx];
+// ── RayGen – Pass1(균일 1spp) / Pass2(Fresnel-guided 추가 spp) ──
+// debugMode 인코딩: 하위 8비트 = actualMode(0~5), 비트8 = passIndex(0/1)
+[shader("raygeneration")]
+void RayGen()
+{
+    uint2 idx = DispatchRaysIndex().xy;
+    uint2 dim = DispatchRaysDimensions().xy;
+
+    uint passIdx    = (debugMode >> 8u) & 0x1u;
+    uint actualMode = debugMode & 0xFFu;
 
     static const float3 k_lum = float3(0.299f, 0.587f, 0.114f);
-    float lumNew = dot(radiance, k_lum);
+
+    uint seed = WangHash(idx.x + idx.y * dim.x + randomSeed * 719393u);
+
+    // ── Pass 2: Fresnel-guided extra samples ─────────────────────
+    if (passIdx == 1u)
+    {
+        float fp = g_fresnel[idx];
+        if (fp <= fresnelThreshold) return;  // 저-F 픽셀 조기 종료
+
+        static const uint k_extraSpp = 4u;
+        float3 extra = (float3)0;
+        for (uint s = 0u; s < k_extraSpp; ++s)
+        {
+            uint s_seed = WangHash(seed ^ (s * 0x9E3779B9u + 0xDEADBEEFu));
+            extra += TracePath(idx, dim, s_seed);
+        }
+        extra /= float(k_extraSpp);
+
+        // 가중 평균: Pass1 (frameCount+1)샘플 + Pass2 k_extraSpp샘플
+        uint   N       = frameCount + 1u;
+        float  w       = float(k_extraSpp) / float(N + k_extraSpp);
+        float3 prev    = g_accumulation[idx].rgb;
+        float3 blended = lerp(prev, extra, w);
+        g_accumulation[idx] = float4(blended, 1.0f);
+
+        // PT 모드일 때만 g_output 갱신
+        if (actualMode == 0u)
+        {
+            float3 color = blended / (blended + 1.0f);
+            color = pow(max(color, 0.0f), 1.0f / 2.2f);
+            g_output[idx] = float4(color, 1.0f);
+        }
+        return;
+    }
+
+    // ── Pass 1: 기존 균일 1spp PT ────────────────────────────────
+    float3 radiance    = TracePath(idx, dim, seed);
+    float3 prevAccum   = g_accumulation[idx].rgb;
+    float  prevAccumSq = g_accumSq[idx];
+    float  lumNew      = dot(radiance, k_lum);
 
     float3 accumulated;
     float  accumulatedSq;
@@ -532,51 +572,39 @@ void RayGen()
     g_accumulation[idx] = float4(accumulated, 1.0f);
     g_accumSq[idx]      = accumulatedSq;
 
-    // g_output 출력 (debugMode에 따라 분기)
-    if (debugMode == 1u)
+    // g_output 출력 (actualMode에 따라 분기)
+    if (actualMode == 1u)
     {
-        // Fresnel 우선도 맵
         float v = g_fresnel[idx];
         g_output[idx] = float4(v, v, v, 1.0f);
     }
-    else if (debugMode == 2u)
+    else if (actualMode == 2u)
     {
-        // 통계적 분산: E[X²] - E[X]²  (수렴할수록 정확)
-        // Reinhard soft saturation: sigma / (sigma + 0.05)
-        //   sigma=0    → 0.0 (완전 수렴, 검정)
-        //   sigma=0.05 → 0.5 (중간 노이즈, 회색)
-        //   sigma=0.5  → 0.91 (고노이즈, 밝은 회색)
-        //   포화 없음 → 낮은/높은 분산 영역 구분 가능
         float lumMean = dot(accumulated, k_lum);
         float sigma   = sqrt(max(accumulatedSq - lumMean * lumMean, 0.0f));
         float v       = sigma / (sigma + 0.5f);
         g_output[idx] = float4(v, v, v, 1.0f);
     }
-    else if (debugMode == 3u)
+    else if (actualMode == 3u)
     {
-        // Depth edge (상대 깊이 Sobel, 1프레임 지연)
         float v = DepthSobel(idx, dim);
         g_output[idx] = float4(v, v, v, 1.0f);
     }
-    else if (debugMode == 4u)
+    else if (actualMode == 4u)
     {
-        // Normal edge (법선 각도 차, 1프레임 지연)
         float v = NormalSobel(idx, dim);
         g_output[idx] = float4(v, v, v, 1.0f);
     }
-    else if (debugMode == 5u)
+    else if (actualMode == 5u)
     {
-        // Threshold mask: PT 출력 위에 F(p) > threshold 픽셀을 붉게 강조
         float3 color = accumulated / (accumulated + 1.0f);
         color = pow(max(color, 0.0f), 1.0f / 2.2f);
-        float fp = g_fresnel[idx];
-        if (fp > fresnelThreshold)
+        if (g_fresnel[idx] > fresnelThreshold)
             color = lerp(color, float3(1.0f, 0.15f, 0.0f), 0.75f);
         g_output[idx] = float4(color, 1.0f);
     }
     else
     {
-        // 표준 PT: Reinhard 톤매핑 + 감마 보정
         float3 color = accumulated / (accumulated + 1.0f);
         color = pow(max(color, 0.0f), 1.0f / 2.2f);
         g_output[idx] = float4(color, 1.0f);
@@ -587,8 +615,9 @@ void RayGen()
 [shader("miss")]
 void MissShader(inout RayPayload payload)
 {
-    // 하늘/배경 히트 → GBuffer 기본값 기록
-    if (payload.depth == 0u)
+    // 하늘/배경 히트 → GBuffer 기본값 기록 (Pass1에서만)
+    uint passIdx = (debugMode >> 8u) & 0x1u;
+    if (payload.depth == 0u && passIdx == 0u)
     {
         uint2 px = DispatchRaysIndex().xy;
         g_fresnel[px] = 0.0f;
@@ -666,8 +695,10 @@ void ClosestHit(inout RayPayload payload,
 
     uint seed = payload.seed;
 
-    // ── F(p) + GBuffer 기록 (bounce 0에서만) ────────────────────────
-    if (payload.depth == 0u)
+    // ── F(p) + GBuffer 기록 (Pass1 bounce 0에서만) ──────────────────
+    // Pass2는 g_fresnel을 읽기 전용으로 사용하므로 덮어쓰면 안 됨
+    uint passIdx = (debugMode >> 8u) & 0x1u;
+    if (payload.depth == 0u && passIdx == 0u)
     {
         uint2 px = DispatchRaysIndex().xy;
 

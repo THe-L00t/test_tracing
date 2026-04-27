@@ -254,6 +254,11 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
             &heapProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
             IID_PPV_ARGS(&m_sceneCB)));
+
+        ThrowIfFailed(m_core.Device()->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&m_sceneCBPass2)));
     }
     std::println("[App] 씬 상수 버퍼 완료");
 
@@ -730,6 +735,13 @@ void App::UpdateSceneCB()
     ThrowIfFailed(m_sceneCB->Map(0, &readRange, &mapped));
     std::memcpy(mapped, &cb, sizeof(SceneCB));
     m_sceneCB->Unmap(0, nullptr);
+
+    // Pass2 CBV: debugMode 비트8=1 (passIndex=1)
+    SceneCB cbPass2 = cb;
+    cbPass2.debugMode |= (1u << 8u);
+    ThrowIfFailed(m_sceneCBPass2->Map(0, &readRange, &mapped));
+    std::memcpy(mapped, &cbPass2, sizeof(SceneCB));
+    m_sceneCBPass2->Unmap(0, nullptr);
 }
 
 // ---------------------------------------------------------------
@@ -839,9 +851,16 @@ void App::OnRender()
     dispatchDesc.Height                    = m_height;
     dispatchDesc.Depth                     = 1;
 
+    cmd->DispatchRays(&dispatchDesc);  // Pass 1
+
+    // Pass1 쓰기 완료 보장 (g_fresnel, g_accumulation 등 Pass2가 읽는 리소스)
+    m_renderTarget.UAVBarriers(cmd);
+
+    // Pass 2: Fresnel-guided extra samples
+    cmd->SetComputeRootConstantBufferView(1, m_sceneCBPass2->GetGPUVirtualAddress());
     cmd->DispatchRays(&dispatchDesc);
 
-    // UAV 쓰기 완료 보장 (g_output + g_accumulation 모두 배리어)
+    // Pass2 쓰기 완료 보장
     m_renderTarget.UAVBarriers(cmd);
 
     // 디노이저가 활성화된 경우: g_accumulation → (A-trous 3패스) → g_output 덮어쓰기
