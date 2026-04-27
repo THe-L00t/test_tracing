@@ -606,6 +606,44 @@ void App::SwitchScene(uint32_t id)
         m_tlas.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ instances });
     }
+    else if (m_sceneID == 4)
+    {
+        // 씬 4 (Cornell Box): 흰 방 + 천장 면광원 + 유리 판 + 골드 구
+        std::println("[App] 씬 4 (Cornell Box) 전환");
+        m_camera.Init(0.0f, 1.5f, -2.8f, 0.0f, 0.0f);
+
+        TLASInstance instances[4]{};
+
+        // 방 (mat0 = 흰 벽/바닥/천장)
+        MakeIdentityTransform(instances[0].transform);
+        instances[0].blasResource = m_roomBLAS.Resource();
+        instances[0].instanceID   = EncodeID(2, 0);
+        instances[0].mask         = 0xFF;
+
+        // 천장 면광원 (mat1 = emissive, 작은 큐브)
+        MakeScaleTranslateTransform(instances[1].transform,
+            1.2f, 0.08f, 1.2f,  0.0f, 3.88f, 0.5f);
+        instances[1].blasResource = m_cubeBLAS.Resource();
+        instances[1].instanceID   = EncodeID(1, 1);
+        instances[1].mask         = 0xFF;
+
+        // 유리 판 (mat2 = glass, 세로로 세운 얇은 판)
+        MakeScaleTranslateTransform(instances[2].transform,
+            0.05f, 1.8f, 1.6f,  0.4f, 0.9f, 0.6f);
+        instances[2].blasResource = m_cubeBLAS.Resource();
+        instances[2].instanceID   = EncodeID(1, 2);
+        instances[2].mask         = 0x02; // 유리 — 그림자 레이 제외
+
+        // 골드 메탈릭 구 (mat3)
+        MakeScaleTranslateTransform(instances[3].transform,
+            0.5f, 0.5f, 0.5f,  -0.9f, 0.5f, 0.5f);
+        instances[3].blasResource = m_sphereBLAS.Resource();
+        instances[3].instanceID   = EncodeID(3, 3);
+        instances[3].mask         = 0xFF;
+
+        m_tlas.Build(m_core.Device(), m_core.CmdList(),
+                     std::span{ instances });
+    }
     else if (m_sceneID == 2)
     {
         // 씬 2 (투명/반투명 구 쇼케이스): 방 + 골드 큐브 + 반투명 구 + 유리 구
@@ -868,6 +906,45 @@ void App::UpdateSceneCB()
 
         cb.emissBoxHalfSize = 0.0f;
     }
+    else if (m_sceneID == 4)
+    {
+        // ── 씬 4 (Cornell Box): 천장 면광원 + 유리 판 + 골드 구 ──
+        // 포인트 라이트는 비활성 (면광원 emissBox가 주 광원)
+        cb.lightPos[0]=0.0f; cb.lightPos[1]=3.88f; cb.lightPos[2]=0.5f;
+        cb.lightIntensity=0.0f; // NEE emissBox가 대체
+        cb.lightColor[0]=1.0f; cb.lightColor[1]=1.0f; cb.lightColor[2]=1.0f;
+        cb.light2Intensity=0.0f;
+
+        // mat0: 흰 방 (벽/바닥/천장)
+        cb.matAlbedoRoughness[0][0]=0.85f; cb.matAlbedoRoughness[0][1]=0.85f;
+        cb.matAlbedoRoughness[0][2]=0.85f; cb.matAlbedoRoughness[0][3]=0.90f;
+        cb.matMetallic[0] = 0.0f;
+        cb.matEmissive[0] = 0.0f;
+
+        // mat1: 천장 면광원 (밝은 흰빛 발광)
+        cb.matAlbedoRoughness[1][0]=1.0f; cb.matAlbedoRoughness[1][1]=0.95f;
+        cb.matAlbedoRoughness[1][2]=0.88f; cb.matAlbedoRoughness[1][3]=1.0f;
+        cb.matMetallic[1] = 0.0f;
+        cb.matEmissive[1] = 8.0f; // 발광 강도
+
+        // mat2: 유리 판 (IOR=1.5)
+        cb.matAlbedoRoughness[2][0]=0.97f; cb.matAlbedoRoughness[2][1]=0.98f;
+        cb.matAlbedoRoughness[2][2]=1.00f; cb.matAlbedoRoughness[2][3]=0.02f;
+        cb.matMetallic[2] = 0.0f;
+        cb.matEmissive[2] = -2.0f; // 유리 신호 (IOR=1.5)
+
+        // mat3: 골드 메탈릭 구
+        cb.matAlbedoRoughness[3][0]=1.00f; cb.matAlbedoRoughness[3][1]=0.71f;
+        cb.matAlbedoRoughness[3][2]=0.29f; cb.matAlbedoRoughness[3][3]=0.05f;
+        cb.matMetallic[3] = 1.0f;
+        cb.matEmissive[3] = 0.0f;
+
+        // 면광원 NEE 파라미터 (면광원 큐브 위치/크기와 일치)
+        cb.emissBoxHalfSize    = 0.6f;
+        cb.emissBoxCenter[0]   = 0.0f;
+        cb.emissBoxCenter[1]   = 3.88f;
+        cb.emissBoxCenter[2]   = 0.5f;
+    }
     else
     {
         // ── 씬 2 (투명/반투명 구 쇼케이스): 포인트 라이트 2개 ──
@@ -940,6 +1017,7 @@ void App::OnKeyDown(uint32_t key)
     else if (key == '2') SwitchScene(1);
     else if (key == '3') SwitchScene(2);
     else if (key == '4') SwitchScene(3);
+    else if (key == '5') SwitchScene(4);
     else if (key == 'R')
     {
         m_denoiseEnabled        = !m_denoiseEnabled;
