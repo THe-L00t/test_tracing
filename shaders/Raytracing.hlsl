@@ -520,6 +520,9 @@ void RayGen()
     // ── Pass 2: Fresnel-guided extra samples ─────────────────────
     if (passIdx == 1u)
     {
+        // 카메라 이동 직후(frameCount<2)는 비활성화 — 5spp vs 1spp 시각 어색함 방지
+        if (frameCount < 2u) return;
+
         float fp = g_fresnel[idx];
         if (fp <= fresnelThreshold) return;  // 저-F 픽셀 조기 종료
 
@@ -619,8 +622,9 @@ void MissShader(inout RayPayload payload)
     uint passIdx = (debugMode >> 8u) & 0x1u;
     if (payload.depth == 0u && passIdx == 0u)
     {
-        uint2 px = DispatchRaysIndex().xy;
-        g_fresnel[px] = 0.0f;
+        uint2 px    = DispatchRaysIndex().xy;
+        float alpha = (frameCount == 0u) ? 1.0f : 0.2f;
+        g_fresnel[px] = lerp(g_fresnel[px], 0.0f, alpha);
         g_depth  [px] = 1e5f;
         g_normal [px] = float4(normalize(WorldRayDirection()) * 0.5f + 0.5f, 1.0f);
     }
@@ -706,7 +710,9 @@ void ClosestHit(inout RayPayload payload,
         float surfaceFactor  = saturate(1.0f - roughness);
         float dielectricFlag = (emissive < -0.5f) ? 1.0f : 0.0f;
         float specWeight     = saturate(metallic + dielectricFlag * 2.0f);
-        g_fresnel[px] = fresnelTerm * surfaceFactor * specWeight;
+        float newFp  = fresnelTerm * surfaceFactor * specWeight;
+        float alpha  = (frameCount == 0u) ? 1.0f : 0.2f;  // 이동 직후 즉시 갱신, 이후 블렌딩
+        g_fresnel[px] = lerp(g_fresnel[px], newFp, alpha);
 
         g_depth [px] = RayTCurrent();
         g_normal[px] = float4(N * 0.5f + 0.5f, 1.0f);
