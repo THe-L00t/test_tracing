@@ -549,7 +549,7 @@ void RayGen()
         //   포화 없음 → 낮은/높은 분산 영역 구분 가능
         float lumMean = dot(accumulated, k_lum);
         float sigma   = sqrt(max(accumulatedSq - lumMean * lumMean, 0.0f));
-        float v       = sigma / (sigma + 0.05f);
+        float v       = sigma / (sigma + 0.5f);
         g_output[idx] = float4(v, v, v, 1.0f);
     }
     else if (debugMode == 3u)
