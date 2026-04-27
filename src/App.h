@@ -64,6 +64,7 @@ private:
     ComPtr<ID3D12Resource>              m_screenshotBuf;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT  m_screenshotFootprint{};
     bool                                m_saveScreenshot = false;
+    int32_t                             m_screenshotTargetFrame = -1;  // -1=비활성, ≥0=목표 프레임
 
     // 카메라
     Camera   m_camera;

@@ -867,11 +867,19 @@ void App::OnKeyDown(uint32_t key)
         m_fresnelThreshold = std::min(1.00f, m_fresnelThreshold + 0.05f);
         std::println("[App] fresnelThreshold → {:.2f}", m_fresnelThreshold);
     }
-    else if (key == 'P')  // 스크린샷 저장
+    else if (key == 'P')  // 스크린샷 예약 (500프레임 누적 후 자동 저장)
     {
-        m_saveScreenshot = true;
-        std::println("[App] 스크린샷 예약 ({}_{:05d}spp)",
-            m_pass2Enabled ? "fresnel" : "baseline", m_frameCount);
+        if (m_screenshotTargetFrame >= 0)
+        {
+            m_screenshotTargetFrame = -1;
+            std::println("[App] 스크린샷 예약 취소");
+        }
+        else
+        {
+            m_screenshotTargetFrame = 500;
+            std::println("[App] 스크린샷 예약: 500프레임 도달 시 자동 저장 (현재 {}프레임)",
+                m_frameCount);
+        }
     }
     else if (key == 'B')  // Pass2 ON/OFF (Baseline 전환)
     {
@@ -913,6 +921,19 @@ void App::OnRender()
     else
     {
         m_frameCount++;
+    }
+
+    // 스크린샷 자동 저장 체크 (P키 예약 시)
+    if (m_screenshotTargetFrame >= 0)
+    {
+        if (m_frameCount == 100 || m_frameCount == 200 || m_frameCount == 300 || m_frameCount == 400)
+            std::println("[App] 스크린샷 대기 중... {}/ {}프레임",
+                m_frameCount, m_screenshotTargetFrame);
+        if ((int32_t)m_frameCount >= m_screenshotTargetFrame)
+        {
+            m_saveScreenshot        = true;
+            m_screenshotTargetFrame = -1;
+        }
     }
 
     UpdateSceneCB();
