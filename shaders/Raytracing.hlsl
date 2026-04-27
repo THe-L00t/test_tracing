@@ -512,7 +512,7 @@ float3 TemporalDisplay(float3 accumulated, float3 prevAccum, uint fc)
     if (fc == 0u) return accumulated;
     float lumPrev = dot(prevAccum,   k_lum_td);
     float lumAcc  = dot(accumulated, k_lum_td);
-    return (lumAcc > lumPrev * 4.0f + 0.1f) ? prevAccum : accumulated;
+    return (lumAcc > lumPrev * 2.0f + 0.1f) ? prevAccum : accumulated;
 }
 
 // debugMode 인코딩: 하위 8비트 = actualMode(0~5), 비트8 = passIndex(0/1)
