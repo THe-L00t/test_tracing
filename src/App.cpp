@@ -863,7 +863,7 @@ void App::OnKeyDown(uint32_t key)
         m_fresnelThreshold = std::min(1.00f, m_fresnelThreshold + 0.05f);
         std::println("[App] fresnelThreshold → {:.2f}", m_fresnelThreshold);
     }
-    else if (key == 'S')  // 스크린샷 저장
+    else if (key == 'P')  // 스크린샷 저장
     {
         m_saveScreenshot = true;
         std::println("[App] 스크린샷 예약 ({}_{:05d}spp)",
