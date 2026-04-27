@@ -545,6 +545,45 @@ void App::SwitchScene(uint32_t id)
         m_tlas.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ instances });
     }
+    else if (m_sceneID == 3)
+    {
+        // 씬 3 (Fresnel 쇼케이스): 크롬 미러 바닥 + 유리·골드 구
+        // 낮은 카메라 시점 → 바닥 grazing angle → F(p) 극대화
+        std::println("[App] 씬 3 (Fresnel 쇼케이스) 전환");
+        m_camera.Init(0.0f, 0.35f, -3.5f, 0.08f, 0.0f);
+
+        TLASInstance instances[4]{};
+
+        // 크롬 미러 바닥 (mat0)
+        MakeIdentityTransform(instances[0].transform);
+        instances[0].blasResource = m_planeBLAS.Resource();
+        instances[0].instanceID   = EncodeID(0, 0);
+        instances[0].mask         = 0xFF;
+
+        // 어두운 배경 벽 (mat3) — 뒤쪽
+        MakeScaleTranslateTransform(instances[1].transform,
+            9.0f, 5.0f, 0.3f,  0.0f, 2.5f, 5.5f);
+        instances[1].blasResource = m_cubeBLAS.Resource();
+        instances[1].instanceID   = EncodeID(1, 3);
+        instances[1].mask         = 0xFF;
+
+        // 골드 메탈릭 구 (mat1) — 왼쪽
+        MakeScaleTranslateTransform(instances[2].transform,
+            0.6f, 0.6f, 0.6f,  -1.3f, 0.6f, 1.5f);
+        instances[2].blasResource = m_sphereBLAS.Resource();
+        instances[2].instanceID   = EncodeID(3, 1);
+        instances[2].mask         = 0xFF;
+
+        // 유리 구 (mat2) — 오른쪽
+        MakeScaleTranslateTransform(instances[3].transform,
+            0.65f, 0.65f, 0.65f,  1.3f, 0.65f, 1.5f);
+        instances[3].blasResource = m_sphereBLAS.Resource();
+        instances[3].instanceID   = EncodeID(3, 2);
+        instances[3].mask         = 0x02; // 그림자 레이 제외 (유리)
+
+        m_tlas.Build(m_core.Device(), m_core.CmdList(),
+                     std::span{ instances });
+    }
     else if (m_sceneID == 2)
     {
         // 씬 2 (투명/반투명 구 쇼케이스): 방 + 골드 큐브 + 반투명 구 + 유리 구
@@ -769,6 +808,45 @@ void App::UpdateSceneCB()
         cb.matMetallic[3] = 0.0f;
         cb.emissBoxHalfSize = 0.0f;
     }
+    else if (m_sceneID == 3)
+    {
+        // ── 씬 3 (Fresnel 쇼케이스): 측면 포인트 라이트 ──
+        // 왼쪽 측면 광원 — 드라마틱 스페큘러 + grazing angle Fresnel
+        cb.lightPos[0]=-4.0f; cb.lightPos[1]=3.0f; cb.lightPos[2]=1.0f;
+        cb.lightIntensity=12.0f;
+        cb.lightColor[0]=1.0f; cb.lightColor[1]=0.95f; cb.lightColor[2]=0.88f; // 따뜻한 흰빛
+
+        // 오른쪽 보조 광원
+        cb.light2Pos[0]=3.5f; cb.light2Pos[1]=2.5f; cb.light2Pos[2]=0.5f;
+        cb.light2Intensity=6.0f;
+        cb.light2Color[0]=0.85f; cb.light2Color[1]=0.90f; cb.light2Color[2]=1.00f; // 차가운 보조광
+
+        // mat0: 크롬 미러 바닥 — roughness 극소, 완전 메탈릭
+        cb.matAlbedoRoughness[0][0]=0.88f; cb.matAlbedoRoughness[0][1]=0.88f;
+        cb.matAlbedoRoughness[0][2]=0.88f; cb.matAlbedoRoughness[0][3]=0.02f;
+        cb.matMetallic[0] = 1.0f;
+        cb.matEmissive[0] = 0.0f;
+
+        // mat1: 골드 메탈릭 구
+        cb.matAlbedoRoughness[1][0]=1.00f; cb.matAlbedoRoughness[1][1]=0.71f;
+        cb.matAlbedoRoughness[1][2]=0.29f; cb.matAlbedoRoughness[1][3]=0.05f;
+        cb.matMetallic[1] = 1.0f;
+        cb.matEmissive[1] = 0.0f;
+
+        // mat2: 유리 구 (IOR=1.5)
+        cb.matAlbedoRoughness[2][0]=0.97f; cb.matAlbedoRoughness[2][1]=0.98f;
+        cb.matAlbedoRoughness[2][2]=1.00f; cb.matAlbedoRoughness[2][3]=0.02f;
+        cb.matMetallic[2] = 0.0f;
+        cb.matEmissive[2] = -2.0f; // 유리 신호 (IOR=1.5)
+
+        // mat3: 어두운 매트 배경 — Fresnel 효과 대비 극대화
+        cb.matAlbedoRoughness[3][0]=0.04f; cb.matAlbedoRoughness[3][1]=0.04f;
+        cb.matAlbedoRoughness[3][2]=0.06f; cb.matAlbedoRoughness[3][3]=0.95f;
+        cb.matMetallic[3] = 0.0f;
+        cb.matEmissive[3] = 0.0f;
+
+        cb.emissBoxHalfSize = 0.0f;
+    }
     else
     {
         // ── 씬 2 (투명/반투명 구 쇼케이스): 포인트 라이트 2개 ──
@@ -840,6 +918,7 @@ void App::OnKeyDown(uint32_t key)
     if (key == '1') SwitchScene(0);
     else if (key == '2') SwitchScene(1);
     else if (key == '3') SwitchScene(2);
+    else if (key == '4') SwitchScene(3);
     else if (key == 'R')
     {
         m_denoiseEnabled        = !m_denoiseEnabled;
@@ -876,8 +955,8 @@ void App::OnKeyDown(uint32_t key)
         }
         else
         {
-            m_screenshotTargetFrame = 500;
-            std::println("[App] 스크린샷 예약: 500프레임 도달 시 자동 저장 (현재 {}프레임)",
+            m_screenshotTargetFrame = 100;
+            std::println("[App] 스크린샷 예약: 100프레임 도달 시 자동 저장 (현재 {}프레임)",
                 m_frameCount);
         }
     }
