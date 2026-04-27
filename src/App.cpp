@@ -2,7 +2,59 @@
 #include <print>
 #include <cstring>
 #include <cmath>
+#include <cstdio>
 #include <vector>
+
+// ---------------------------------------------------------------
+// BMP 저장 헬퍼 (BGR24, 외부 라이브러리 없음)
+// RGBA 픽셀 데이터를 BGR BMP 파일로 저장
+// srcRowPitch: D3D12 readback 버퍼의 행 피치 (바이트)
+// ---------------------------------------------------------------
+static void SaveBMP(const std::string& path, const uint8_t* rgba,
+                    uint32_t w, uint32_t h, uint32_t srcRowPitch)
+{
+    const uint32_t bmpRow  = (w * 3u + 3u) & ~3u;  // 4바이트 정렬
+    const uint32_t imgSize = bmpRow * h;
+    const uint32_t fileSz  = 54u + imgSize;
+
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) { std::println("[App] BMP 파일 열기 실패: {}", path); return; }
+
+    // BITMAPFILEHEADER (14 bytes)
+    uint8_t fh[14]{};
+    fh[0] = 'B'; fh[1] = 'M';
+    std::memcpy(fh + 2,  &fileSz,      4);
+    constexpr uint32_t k_dataOff = 54u;
+    std::memcpy(fh + 10, &k_dataOff,   4);
+    fwrite(fh, 1, 14, f);
+
+    // BITMAPINFOHEADER (40 bytes)
+    uint8_t ih[40]{};
+    constexpr uint32_t k_hdrSz = 40u;
+    const int32_t  negH   = -(int32_t)h;  // 음수 = top-down
+    constexpr uint16_t k_planes = 1u, k_bpp = 24u;
+    std::memcpy(ih +  0, &k_hdrSz,  4);
+    std::memcpy(ih +  4, &w,        4);
+    std::memcpy(ih +  8, &negH,     4);
+    std::memcpy(ih + 12, &k_planes, 2);
+    std::memcpy(ih + 14, &k_bpp,    2);
+    std::memcpy(ih + 20, &imgSize,  4);
+    fwrite(ih, 1, 40, f);
+
+    // 픽셀 데이터: RGBA → BGR, top-down
+    for (uint32_t y = 0; y < h; ++y)
+    {
+        const uint8_t* row = rgba + (size_t)y * srcRowPitch;
+        for (uint32_t x = 0; x < w; ++x)
+        {
+            const uint8_t bgr[3] = { row[x*4+2], row[x*4+1], row[x*4+0] };
+            fwrite(bgr, 1, 3, f);
+        }
+        const uint8_t pad[3]{};
+        if (const uint32_t p = bmpRow - w * 3u) fwrite(pad, 1, p, f);
+    }
+    fclose(f);
+}
 
 // ---------------------------------------------------------------
 // 구 메시 생성 (UV 구, 삼각형 리스트, 단위 구 반지름 1)
@@ -261,6 +313,38 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
             IID_PPV_ARGS(&m_sceneCBPass2)));
     }
     std::println("[App] 씬 상수 버퍼 완료");
+
+    // 스크린샷 읽기 버퍼 (Readback heap, g_output RGBA8 전체)
+    {
+        D3D12_RESOURCE_DESC texDesc{};
+        texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        texDesc.Width            = width;
+        texDesc.Height           = height;
+        texDesc.DepthOrArraySize = 1;
+        texDesc.MipLevels        = 1;
+        texDesc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc       = { 1, 0 };
+
+        UINT64 totalBytes = 0;
+        m_core.Device()->GetCopyableFootprints(
+            &texDesc, 0, 1, 0, &m_screenshotFootprint, nullptr, nullptr, &totalBytes);
+
+        D3D12_HEAP_PROPERTIES rbHeap{ D3D12_HEAP_TYPE_READBACK };
+        D3D12_RESOURCE_DESC   bufDesc{};
+        bufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufDesc.Width            = totalBytes;
+        bufDesc.Height           = 1;
+        bufDesc.DepthOrArraySize = 1;
+        bufDesc.MipLevels        = 1;
+        bufDesc.SampleDesc       = { 1, 0 };
+        bufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        ThrowIfFailed(m_core.Device()->CreateCommittedResource(
+            &rbHeap, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&m_screenshotBuf)));
+    }
+    std::println("[App] 스크린샷 버퍼 완료");
 
     // BLAS 빌드 (AS 빌드용: Present 없이 제출 후 GPU 대기)
     ThrowIfFailed(m_core.CmdAlloc(0)->Reset());
@@ -779,6 +863,19 @@ void App::OnKeyDown(uint32_t key)
         m_fresnelThreshold = std::min(1.00f, m_fresnelThreshold + 0.05f);
         std::println("[App] fresnelThreshold → {:.2f}", m_fresnelThreshold);
     }
+    else if (key == 'S')  // 스크린샷 저장
+    {
+        m_saveScreenshot = true;
+        std::println("[App] 스크린샷 예약 ({}_{:05d}spp)",
+            m_pass2Enabled ? "fresnel" : "baseline", m_frameCount);
+    }
+    else if (key == 'B')  // Pass2 ON/OFF (Baseline 전환)
+    {
+        m_pass2Enabled = !m_pass2Enabled;
+        std::println("[App] Pass2 {} — {}",
+            m_pass2Enabled ? "ON" : "OFF",
+            m_pass2Enabled ? "Fresnel-guided" : "Baseline (1spp uniform)");
+    }
 }
 
 // ---------------------------------------------------------------
@@ -856,12 +953,13 @@ void App::OnRender()
     // Pass1 쓰기 완료 보장 (g_fresnel, g_accumulation 등 Pass2가 읽는 리소스)
     m_renderTarget.UAVBarriers(cmd);
 
-    // Pass 2: Fresnel-guided extra samples
-    cmd->SetComputeRootConstantBufferView(1, m_sceneCBPass2->GetGPUVirtualAddress());
-    cmd->DispatchRays(&dispatchDesc);
-
-    // Pass2 쓰기 완료 보장
-    m_renderTarget.UAVBarriers(cmd);
+    // Pass 2: Fresnel-guided extra samples (B키로 ON/OFF)
+    if (m_pass2Enabled)
+    {
+        cmd->SetComputeRootConstantBufferView(1, m_sceneCBPass2->GetGPUVirtualAddress());
+        cmd->DispatchRays(&dispatchDesc);
+        m_renderTarget.UAVBarriers(cmd);
+    }
 
     // 디노이저가 활성화된 경우: g_accumulation → (A-trous 3패스) → g_output 덮어쓰기
     if (m_denoiseEnabled)
@@ -874,7 +972,45 @@ void App::OnRender()
     // 결과를 백버퍼로 복사 후 Present
     m_renderTarget.CopyToBackBuffer(cmd, m_core.BackBuffer());
 
+    // 스크린샷 요청 시: g_output → readback 버퍼로 복사 (EndFrame 전에 커맨드 기록)
+    if (m_saveScreenshot)
+    {
+        m_renderTarget.TransitionTo(cmd, D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource       = m_screenshotBuf.Get();
+        dst.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint = m_screenshotFootprint;
+
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource        = m_renderTarget.Resource();
+        src.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.SubresourceIndex = 0;
+
+        cmd->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        m_renderTarget.TransitionTo(cmd, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
     m_core.EndFrame(m_smoothFps, m_denoiseEnabled);
+
+    // 스크린샷: GPU 완료 대기 후 BMP 저장
+    if (m_saveScreenshot)
+    {
+        m_core.FlushGPU();
+
+        uint8_t* pixels   = nullptr;
+        const UINT64 sz   = (UINT64)m_screenshotFootprint.Footprint.RowPitch * m_height;
+        D3D12_RANGE  rng  = { 0, (SIZE_T)sz };
+        ThrowIfFailed(m_screenshotBuf->Map(0, &rng, reinterpret_cast<void**>(&pixels)));
+
+        const std::string filename = std::format("screenshot_{}_{:05d}spp.bmp",
+            m_pass2Enabled ? "fresnel" : "baseline", m_frameCount);
+        SaveBMP(filename, pixels, m_width, m_height, m_screenshotFootprint.Footprint.RowPitch);
+
+        m_screenshotBuf->Unmap(0, nullptr);
+        std::println("[App] 스크린샷 저장 완료: {}", filename);
+        m_saveScreenshot = false;
+    }
 }
 
 void App::OnResize(uint32_t width, uint32_t height)

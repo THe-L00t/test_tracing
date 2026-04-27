@@ -60,6 +60,11 @@ private:
     ComPtr<ID3D12Resource> m_sceneCB;
     ComPtr<ID3D12Resource> m_sceneCBPass2;  // Pass2 전용 (debugMode 비트8=1 설정)
 
+    // 스크린샷 읽기 버퍼 (Readback heap)
+    ComPtr<ID3D12Resource>              m_screenshotBuf;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT  m_screenshotFootprint{};
+    bool                                m_saveScreenshot = false;
+
     // 카메라
     Camera   m_camera;
 
@@ -82,6 +87,7 @@ private:
     // 0=PT, 1=Fresnel, 2=Var, 3=DepthEdge, 4=NormalEdge, 5=ThresholdMask
     uint32_t m_debugMode         = 0;
     float    m_fresnelThreshold  = 0.05f;  // [/] 키로 ±0.05 조정
+    bool     m_pass2Enabled      = true;   // B키 토글 (false=Baseline, true=Fresnel-guided)
 
     // 마우스 캡처
     HWND     m_hwnd          = nullptr;
