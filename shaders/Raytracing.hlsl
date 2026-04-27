@@ -737,10 +737,18 @@ void ClosestHit(inout RayPayload payload,
         else
         {
             // 씬 6, 8: 흑백 체커보드
-            int cx = (int)floor(hitPos.x * 2.0f);
-            int cy = (int)floor(hitPos.y * 2.0f);
-            int cz = (int)floor(hitPos.z * 2.0f);
-            albedo    = (((cx + cy + cz) & 1) != 0)
+            // 법선 방향으로 2D 투영 → 3D 대각 등값면(원형 띠) 제거
+            float3 absN = abs(N);
+            float2 uv;
+            if (absN.y >= absN.x && absN.y >= absN.z)
+                uv = hitPos.xz;   // 수평면 (바닥/천장)
+            else if (absN.z >= absN.x)
+                uv = hitPos.xy;   // Z축 향 벽
+            else
+                uv = hitPos.yz;   // X축 향 벽
+            int cu = (int)floor(uv.x * 2.0f);
+            int cv = (int)floor(uv.y * 2.0f);
+            albedo    = (((cu + cv) & 1) != 0)
                 ? float3(0.05f, 0.05f, 0.05f)
                 : float3(0.92f, 0.92f, 0.92f);
             roughness = 0.85f;
