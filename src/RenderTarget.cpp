@@ -95,6 +95,60 @@ void RenderTarget::Init(ID3D12Device* device, DescriptorHeap& heap,
         device->CreateUnorderedAccessView(
             m_fresnel.Get(), nullptr, &uavDesc, m_fresnelHandle.cpu);
     }
+
+    // ── 슬롯 3: g_depth (R32F, 1차 레이 히트 거리) ──
+    {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = width;
+        desc.Height           = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_R32_FLOAT;
+        desc.SampleDesc       = {1, 0};
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        ThrowIfFailed(device->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE,
+            &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            nullptr, IID_PPV_ARGS(&m_depth)));
+
+        m_depthHandle = heap.Allocate();
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uavDesc.Format        = DXGI_FORMAT_R32_FLOAT;
+        device->CreateUnorderedAccessView(
+            m_depth.Get(), nullptr, &uavDesc, m_depthHandle.cpu);
+    }
+
+    // ── 슬롯 4: g_normal (RGBA32F, 1차 레이 표면 법선) ──
+    {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = width;
+        desc.Height           = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        desc.SampleDesc       = {1, 0};
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        ThrowIfFailed(device->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE,
+            &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            nullptr, IID_PPV_ARGS(&m_normal)));
+
+        m_normalHandle = heap.Allocate();
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uavDesc.Format        = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        device->CreateUnorderedAccessView(
+            m_normal.Get(), nullptr, &uavDesc, m_normalHandle.cpu);
+    }
 }
 
 void RenderTarget::ClearAccumulation(ID3D12GraphicsCommandList* cmdList)
@@ -115,14 +169,18 @@ void RenderTarget::ClearAccumulation(ID3D12GraphicsCommandList* cmdList)
 
 void RenderTarget::UAVBarriers(ID3D12GraphicsCommandList* cmdList)
 {
-    D3D12_RESOURCE_BARRIER barriers[3]{};
+    D3D12_RESOURCE_BARRIER barriers[5]{};
     barriers[0].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barriers[0].UAV.pResource = m_texture.Get();
     barriers[1].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barriers[1].UAV.pResource = m_accumulation.Get();
     barriers[2].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barriers[2].UAV.pResource = m_fresnel.Get();
-    cmdList->ResourceBarrier(3, barriers);
+    barriers[3].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barriers[3].UAV.pResource = m_depth.Get();
+    barriers[4].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barriers[4].UAV.pResource = m_normal.Get();
+    cmdList->ResourceBarrier(5, barriers);
 }
 
 void RenderTarget::TransitionTo(ID3D12GraphicsCommandList* cmdList,

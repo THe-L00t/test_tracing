@@ -24,6 +24,8 @@
 RWTexture2D<float4>             g_output       : register(u0);
 RWTexture2D<float4>             g_accumulation : register(u1);
 RWTexture2D<float>              g_fresnel      : register(u2);  // Fresnel 우선도 맵 F(p)
+RWTexture2D<float>              g_depth        : register(u3);  // GBuffer: 1차 레이 히트 거리
+RWTexture2D<float4>             g_normal       : register(u4);  // GBuffer: 표면 법선 (N*0.5+0.5)
 RaytracingAccelerationStructure g_tlas         : register(t0);
 
 struct VertexPN { float3 pos; float3 normal; };
@@ -391,6 +393,56 @@ float3 DirectLighting(float3 hitPos, float3 N, float3 V,
     return result;
 }
 
+// ── GBuffer Sobel 엣지 검출 헬퍼 ────────────────────────────────
+// 인접 픽셀은 이전 프레임 데이터를 읽음 (정적 씬에서는 동일, 1프레임 지연 허용)
+
+float SampleDepthC(int2 p, int2 mx)
+{
+    return g_depth[uint2(clamp(p, int2(0, 0), mx))];
+}
+float3 SampleNormalC(int2 p, int2 mx)
+{
+    return g_normal[uint2(clamp(p, int2(0, 0), mx))].xyz * 2.0f - 1.0f;
+}
+
+// 상대 깊이 기준 Sobel (카메라 거리 무관)
+float DepthSobel(uint2 c, uint2 dim)
+{
+    int2  ic  = int2(c);
+    int2  mx  = int2(dim) - 1;
+    float ctr = max(SampleDepthC(ic, mx), 0.001f);
+
+    float d00 = SampleDepthC(ic + int2(-1,-1), mx) / ctr;
+    float d10 = SampleDepthC(ic + int2( 0,-1), mx) / ctr;
+    float d20 = SampleDepthC(ic + int2( 1,-1), mx) / ctr;
+    float d01 = SampleDepthC(ic + int2(-1, 0), mx) / ctr;
+    float d21 = SampleDepthC(ic + int2( 1, 0), mx) / ctr;
+    float d02 = SampleDepthC(ic + int2(-1, 1), mx) / ctr;
+    float d12 = SampleDepthC(ic + int2( 0, 1), mx) / ctr;
+    float d22 = SampleDepthC(ic + int2( 1, 1), mx) / ctr;
+
+    float gx = -d00 + d20 - 2.0f*d01 + 2.0f*d21 - d02 + d22;
+    float gy = -d00 - 2.0f*d10 - d20 + d02 + 2.0f*d12 + d22;
+    return saturate(sqrt(gx*gx + gy*gy) * 2.0f);
+}
+
+// 인접 법선 각도 차 최댓값 기반 엣지
+float NormalSobel(uint2 c, uint2 dim)
+{
+    int2   ic      = int2(c);
+    int2   mx      = int2(dim) - 1;
+    float3 n       = SampleNormalC(ic, mx);
+    float  maxDiff = 0.0f;
+    for (int dy = -1; dy <= 1; ++dy)
+    for (int dx = -1; dx <= 1; ++dx)
+    {
+        if (dx == 0 && dy == 0) continue;
+        float3 nb  = SampleNormalC(ic + int2(dx, dy), mx);
+        maxDiff = max(maxDiff, 1.0f - saturate(dot(n, nb)));
+    }
+    return saturate(maxDiff * 4.0f);
+}
+
 // ── RayGen – 균일 1spp 패스 트레이싱 ───────────────────────────
 [shader("raygeneration")]
 void RayGen()
@@ -456,20 +508,42 @@ void RayGen()
     }
 
     // 시간적 누적 (프레임당 1spp)
+    float3 prevAccum = g_accumulation[idx].rgb;  // 분산 계산용 이전 누적 평균
+
     float3 accumulated;
     if (frameCount == 0u)
         accumulated = radiance;
     else
-        accumulated = lerp(g_accumulation[idx].rgb, radiance, 1.0f / float(frameCount + 1u));
+        accumulated = lerp(prevAccum, radiance, 1.0f / float(frameCount + 1u));
 
     g_accumulation[idx] = float4(accumulated, 1.0f);
 
     // g_output 출력 (debugMode에 따라 분기)
     if (debugMode == 1u)
     {
-        // Fresnel 우선도 맵 시각화 (grayscale)
-        float fp = g_fresnel[idx];
-        g_output[idx] = float4(fp, fp, fp, 1.0f);
+        // Fresnel 우선도 맵
+        float v = g_fresnel[idx];
+        g_output[idx] = float4(v, v, v, 1.0f);
+    }
+    else if (debugMode == 2u)
+    {
+        // 시간적 분산 프록시: |현재 샘플 휘도 - 누적 평균 휘도|
+        float lumNew = dot(radiance,  float3(0.299f, 0.587f, 0.114f));
+        float lumOld = dot(prevAccum, float3(0.299f, 0.587f, 0.114f));
+        float v      = saturate(abs(lumNew - lumOld) * 3.0f);
+        g_output[idx] = float4(v, v, v, 1.0f);
+    }
+    else if (debugMode == 3u)
+    {
+        // Depth edge (상대 깊이 Sobel, 1프레임 지연)
+        float v = DepthSobel(idx, dim);
+        g_output[idx] = float4(v, v, v, 1.0f);
+    }
+    else if (debugMode == 4u)
+    {
+        // Normal edge (법선 각도 차, 1프레임 지연)
+        float v = NormalSobel(idx, dim);
+        g_output[idx] = float4(v, v, v, 1.0f);
     }
     else
     {
@@ -484,9 +558,14 @@ void RayGen()
 [shader("miss")]
 void MissShader(inout RayPayload payload)
 {
-    // 하늘/배경 히트 → F(p) 기여 없음
+    // 하늘/배경 히트 → GBuffer 기본값 기록
     if (payload.depth == 0u)
-        g_fresnel[DispatchRaysIndex().xy] = 0.0f;
+    {
+        uint2 px = DispatchRaysIndex().xy;
+        g_fresnel[px] = 0.0f;
+        g_depth  [px] = 1e5f;
+        g_normal [px] = float4(normalize(WorldRayDirection()) * 0.5f + 0.5f, 1.0f);
+    }
 
     float3 d = normalize(WorldRayDirection());
 
@@ -558,15 +637,19 @@ void ClosestHit(inout RayPayload payload,
 
     uint seed = payload.seed;
 
-    // ── F(p): Fresnel 우선도 맵 (bounce 0에서만 기록) ────────────
-    // 유전체(유리·반투명) 및 금속 표면의 grazing-angle Fresnel transition 강조
+    // ── F(p) + GBuffer 기록 (bounce 0에서만) ────────────────────────
     if (payload.depth == 0u)
     {
+        uint2 px = DispatchRaysIndex().xy;
+
         float fresnelTerm    = pow(1.0f - saturate(dot(N, V)), 5.0f);
         float surfaceFactor  = saturate(1.0f - roughness);
-        float dielectricFlag = (emissive < -0.5f) ? 1.0f : 0.0f;  // 유리 + 반투명
+        float dielectricFlag = (emissive < -0.5f) ? 1.0f : 0.0f;
         float specWeight     = saturate(metallic + dielectricFlag * 2.0f);
-        g_fresnel[DispatchRaysIndex().xy] = fresnelTerm * surfaceFactor * specWeight;
+        g_fresnel[px] = fresnelTerm * surfaceFactor * specWeight;
+
+        g_depth [px] = RayTCurrent();
+        g_normal[px] = float4(N * 0.5f + 0.5f, 1.0f);
     }
 
     // ── 유리 / 반투명 (기존 로직 유지, scatterPdf=0 표기) ────────

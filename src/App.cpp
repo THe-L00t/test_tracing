@@ -330,21 +330,23 @@ void App::BuildBLASes()
 // 슬롯 0: UAV u0 (g_output,       RGBA8   – RenderTarget::Init 내부)
 // 슬롯 1: UAV u1 (g_accumulation, RGBA32F – RenderTarget::Init 내부)
 // 슬롯 2: UAV u2 (g_fresnel,      R32F    – RenderTarget::Init 내부)
-// 슬롯 3: SRV t0 (TLAS)
-// 슬롯 4: SRV t1 (plane VB)
-// 슬롯 5: SRV t2 (cube VB)
-// 슬롯 6: SRV t3 (room VB)
-// 슬롯 7: SRV t4 (sphere VB)
+// 슬롯 3: UAV u3 (g_depth,        R32F    – RenderTarget::Init 내부)
+// 슬롯 4: UAV u4 (g_normal,       RGBA32F – RenderTarget::Init 내부)
+// 슬롯 5: SRV t0 (TLAS)
+// 슬롯 6: SRV t1 (plane VB)
+// 슬롯 7: SRV t2 (cube VB)
+// 슬롯 8: SRV t3 (room VB)
+// 슬롯 9: SRV t4 (sphere VB)
 // ---------------------------------------------------------------
 void App::BuildDescriptors()
 {
     auto& heap   = m_core.CbvSrvUavHeap();
     auto* device = m_core.Device();
 
-    // 슬롯 0,1,2: UAV (렌더 타겟 + Fresnel 맵)
+    // 슬롯 0~4: UAV (렌더 타겟 + GBuffer)
     m_renderTarget.Init(device, heap, m_width, m_height);
 
-    // 슬롯 3: SRV (TLAS)  ← 슬롯 0,1,2는 RenderTarget::Init에서 UAV로 사용
+    // 슬롯 5: SRV (TLAS)  ← 슬롯 0..4는 RenderTarget::Init에서 UAV로 사용
     m_tlasSRV = heap.Allocate();
     RebuildTLASSRV();
 
@@ -747,8 +749,10 @@ void App::OnKeyDown(uint32_t key)
     }
     else if (key == 'V')
     {
-        m_debugMode = (m_debugMode + 1u) % 2u;
-        static constexpr const char* k_names[] = { "PT (표준)", "Fresnel map" };
+        m_debugMode = (m_debugMode + 1u) % 5u;
+        static constexpr const char* k_names[] = {
+            "PT (표준)", "Fresnel map", "Variance", "Depth edge", "Normal edge"
+        };
         std::println("[App] debugMode → {} ({})", m_debugMode, k_names[m_debugMode]);
     }
 }
