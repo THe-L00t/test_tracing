@@ -59,7 +59,8 @@ cbuffer SceneConstants : register(b0)
 static const float PI     = 3.14159265358979f;
 static const float INV_PI = 0.31830988618379f;
 static const float TWO_PI = 6.28318530717959f;
-static const uint  k_maxBounce = 8u;
+static const uint  k_maxBounce    = 8u;
+static const float k_displayClamp = 10.0f;  // 출력 전용 클램프 (누적 버퍼는 unbiased 유지)
 
 // ── 페이로드 ────────────────────────────────────────────────────
 struct RayPayload
@@ -542,10 +543,11 @@ void RayGen()
         float3 blended = lerp(prev, extra, w);
         g_accumulation[idx] = float4(blended, 1.0f);
 
-        // PT 모드일 때만 g_output 갱신
+        // PT 모드일 때만 g_output 갱신 (표시용만 클램프, 누적 버퍼는 그대로)
         if (actualMode == 0u)
         {
-            float3 color = blended / (blended + 1.0f);
+            float3 display = min(blended, k_displayClamp);
+            float3 color = display / (display + 1.0f);
             color = pow(max(color, 0.0f), 1.0f / 2.2f);
             g_output[idx] = float4(color, 1.0f);
         }
@@ -600,7 +602,8 @@ void RayGen()
     }
     else if (actualMode == 5u)
     {
-        float3 color = accumulated / (accumulated + 1.0f);
+        float3 display = min(accumulated, k_displayClamp);
+        float3 color = display / (display + 1.0f);
         color = pow(max(color, 0.0f), 1.0f / 2.2f);
         if (g_fresnel[idx] > fresnelThreshold)
             color = lerp(color, float3(1.0f, 0.15f, 0.0f), 0.75f);
@@ -608,7 +611,8 @@ void RayGen()
     }
     else
     {
-        float3 color = accumulated / (accumulated + 1.0f);
+        float3 display = min(accumulated, k_displayClamp);
+        float3 color = display / (display + 1.0f);
         color = pow(max(color, 0.0f), 1.0f / 2.2f);
         g_output[idx] = float4(color, 1.0f);
     }
