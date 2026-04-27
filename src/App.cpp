@@ -1045,7 +1045,7 @@ void App::OnKeyDown(uint32_t key)
         m_fresnelThreshold = std::min(1.00f, m_fresnelThreshold + 0.05f);
         std::println("[App] fresnelThreshold → {:.2f}", m_fresnelThreshold);
     }
-    else if (key == 'P')  // 스크린샷 예약 (500프레임 누적 후 자동 저장)
+    else if (key == 'P')  // 저spp 비교용 (100프레임)
     {
         if (m_screenshotTargetFrame >= 0)
         {
@@ -1055,8 +1055,20 @@ void App::OnKeyDown(uint32_t key)
         else
         {
             m_screenshotTargetFrame = 100;
-            std::println("[App] 스크린샷 예약: 100프레임 도달 시 자동 저장 (현재 {}프레임)",
-                m_frameCount);
+            std::println("[App] 스크린샷 예약: 100프레임 자동 저장 (현재 {}프레임)", m_frameCount);
+        }
+    }
+    else if (key == 'O')  // Ground truth용 (10000프레임)
+    {
+        if (m_screenshotTargetFrame >= 0)
+        {
+            m_screenshotTargetFrame = -1;
+            std::println("[App] 스크린샷 예약 취소");
+        }
+        else
+        {
+            m_screenshotTargetFrame = 10000;
+            std::println("[App] Ground truth 예약: 10000프레임 자동 저장 (현재 {}프레임)", m_frameCount);
         }
     }
     else if (key == 'B')  // Pass2 ON/OFF (Baseline 전환)
