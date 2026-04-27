@@ -329,20 +329,22 @@ void App::BuildBLASes()
 // 디스크립터 힙 구성
 // 슬롯 0: UAV u0 (g_output,       RGBA8   – RenderTarget::Init 내부)
 // 슬롯 1: UAV u1 (g_accumulation, RGBA32F – RenderTarget::Init 내부)
-// 슬롯 2: SRV t0 (TLAS)
-// 슬롯 3: SRV t1 (plane VB)
-// 슬롯 4: SRV t2 (cube VB)
-// 슬롯 5: SRV t3 (room VB)
+// 슬롯 2: UAV u2 (g_fresnel,      R32F    – RenderTarget::Init 내부)
+// 슬롯 3: SRV t0 (TLAS)
+// 슬롯 4: SRV t1 (plane VB)
+// 슬롯 5: SRV t2 (cube VB)
+// 슬롯 6: SRV t3 (room VB)
+// 슬롯 7: SRV t4 (sphere VB)
 // ---------------------------------------------------------------
 void App::BuildDescriptors()
 {
     auto& heap   = m_core.CbvSrvUavHeap();
     auto* device = m_core.Device();
 
-    // 슬롯 0: UAV (렌더 타겟)
+    // 슬롯 0,1,2: UAV (렌더 타겟 + Fresnel 맵)
     m_renderTarget.Init(device, heap, m_width, m_height);
 
-    // 슬롯 2: SRV (TLAS)  ← 슬롯 0,1은 RenderTarget::Init에서 UAV로 사용
+    // 슬롯 3: SRV (TLAS)  ← 슬롯 0,1,2는 RenderTarget::Init에서 UAV로 사용
     m_tlasSRV = heap.Allocate();
     RebuildTLASSRV();
 
@@ -716,6 +718,7 @@ void App::UpdateSceneCB()
     // 패스 트레이싱 누적 파라미터
     cb.frameCount  = m_frameCount;
     cb.randomSeed  = m_frameCount;  // 프레임마다 달라지는 시드
+    cb.debugMode   = m_debugMode;
 
     // 업로드 버퍼에 직접 기록
     void* mapped = nullptr;
@@ -741,6 +744,12 @@ void App::OnKeyDown(uint32_t key)
         m_cameraMoved           = true;
         m_accumDirty            = true;  // 디노이저 상태 변화 → 누적 버퍼 클리어 필요
         std::println("[App] 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
+    }
+    else if (key == 'V')
+    {
+        m_debugMode = (m_debugMode + 1u) % 2u;
+        static constexpr const char* k_names[] = { "PT (표준)", "Fresnel map" };
+        std::println("[App] debugMode → {} ({})", m_debugMode, k_names[m_debugMode]);
     }
 }
 

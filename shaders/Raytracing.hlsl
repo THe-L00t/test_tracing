@@ -23,6 +23,7 @@
 // ── 리소스 ──────────────────────────────────────────────────────
 RWTexture2D<float4>             g_output       : register(u0);
 RWTexture2D<float4>             g_accumulation : register(u1);
+RWTexture2D<float>              g_fresnel      : register(u2);  // Fresnel 우선도 맵 F(p)
 RaytracingAccelerationStructure g_tlas         : register(t0);
 
 struct VertexPN { float3 pos; float3 normal; };
@@ -48,7 +49,7 @@ cbuffer SceneConstants : register(b0)
     float4 matEmissive;             // .xyzw = emissive signal
 
     uint   frameCount;  uint   randomSeed;  float  emissBoxHalfSize; float _cbPad1;
-    float3 emissBoxCenter;  float _cbPad2;
+    float3 emissBoxCenter;  uint  debugMode;   // 0=PT, 1=Fresnel map 시각화
 }
 
 // ── 상수 ────────────────────────────────────────────────────────
@@ -463,16 +464,30 @@ void RayGen()
 
     g_accumulation[idx] = float4(accumulated, 1.0f);
 
-    // Reinhard 톤매핑 + 감마 보정
-    float3 color = accumulated / (accumulated + 1.0f);
-    color = pow(max(color, 0.0f), 1.0f / 2.2f);
-    g_output[idx] = float4(color, 1.0f);
+    // g_output 출력 (debugMode에 따라 분기)
+    if (debugMode == 1u)
+    {
+        // Fresnel 우선도 맵 시각화 (grayscale)
+        float fp = g_fresnel[idx];
+        g_output[idx] = float4(fp, fp, fp, 1.0f);
+    }
+    else
+    {
+        // 표준 PT: Reinhard 톤매핑 + 감마 보정
+        float3 color = accumulated / (accumulated + 1.0f);
+        color = pow(max(color, 0.0f), 1.0f / 2.2f);
+        g_output[idx] = float4(color, 1.0f);
+    }
 }
 
 // ── Miss[0]: 환경광 ─────────────────────────────────────────────
 [shader("miss")]
 void MissShader(inout RayPayload payload)
 {
+    // 하늘/배경 히트 → F(p) 기여 없음
+    if (payload.depth == 0u)
+        g_fresnel[DispatchRaysIndex().xy] = 0.0f;
+
     float3 d = normalize(WorldRayDirection());
 
     if (sceneID == 0)
@@ -542,6 +557,17 @@ void ClosestHit(inout RayPayload payload,
     float  emissive  = matEmissive[matIdx];
 
     uint seed = payload.seed;
+
+    // ── F(p): Fresnel 우선도 맵 (bounce 0에서만 기록) ────────────
+    // 유리/거울의 grazing-angle Fresnel transition 영역을 강조
+    if (payload.depth == 0u)
+    {
+        float fresnelTerm   = pow(1.0f - saturate(dot(N, V)), 5.0f);
+        float surfaceFactor = saturate(1.0f - roughness);
+        float glassFlag     = (emissive < -1.5f) ? 1.0f : 0.0f;
+        float specWeight    = saturate(metallic + glassFlag * 2.0f);
+        g_fresnel[DispatchRaysIndex().xy] = fresnelTerm * surfaceFactor * specWeight;
+    }
 
     // ── 유리 / 반투명 (기존 로직 유지, scatterPdf=0 표기) ────────
     if (emissive < -0.5f)

@@ -77,6 +77,10 @@ private:
     bool     m_cameraMoved  = true;
     bool     m_accumDirty   = true;  // 씬 전환/디노이저 토글 시 누적 버퍼 클리어 필요
 
+    // 연구용 디버그 모드 (V키 순환)
+    // 0=PT 표준 출력, 1=Fresnel 우선도 맵 시각화
+    uint32_t m_debugMode    = 0;
+
     // 마우스 캡처
     HWND     m_hwnd          = nullptr;
     bool     m_mouseCaptured = false;

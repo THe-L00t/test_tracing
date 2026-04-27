@@ -2,7 +2,10 @@
 #include "Common.h"
 #include "DescriptorHeap.h"
 
-// 레이트레이싱 출력 버퍼 (슬롯 0: RGBA8 표시용, 슬롯 1: RGBA32F 누적용)
+// 레이트레이싱 출력 버퍼
+//   슬롯 0: RGBA8   표시용 (g_output, u0)
+//   슬롯 1: RGBA32F 누적용 (g_accumulation, u1)
+//   슬롯 2: R32F    Fresnel 우선도 맵 (g_fresnel, u2)
 class RenderTarget
 {
 public:
@@ -22,8 +25,9 @@ public:
     // SetDescriptorHeaps(shader-visible heap) 호출 이후에 사용해야 함
     void ClearAccumulation(ID3D12GraphicsCommandList* cmdList);
 
-    ID3D12Resource* Resource()      const noexcept { return m_texture.Get(); }
-    ID3D12Resource* AccumResource() const noexcept { return m_accumulation.Get(); }
+    ID3D12Resource* Resource()        const noexcept { return m_texture.Get(); }
+    ID3D12Resource* AccumResource()   const noexcept { return m_accumulation.Get(); }
+    ID3D12Resource* FresnelResource() const noexcept { return m_fresnel.Get(); }
 
 private:
     // 슬롯 0: g_output  (RGBA8,   표시 및 톤맵 결과)
@@ -34,6 +38,10 @@ private:
     // 슬롯 1: g_accumulation  (RGBA32F, HDR 누적)
     ComPtr<ID3D12Resource> m_accumulation;
     DescriptorHandle       m_accumHandle;
+
+    // 슬롯 2: g_fresnel  (R32F, Fresnel 우선도 맵)
+    ComPtr<ID3D12Resource> m_fresnel;
+    DescriptorHandle       m_fresnelHandle;
 
     // ClearUnorderedAccessViewFloat용 non-shader-visible CPU 핸들
     DescriptorHeap              m_clearHeap;

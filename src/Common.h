@@ -106,7 +106,7 @@ struct alignas(16) SceneCB
     float    emissBoxHalfSize;    // 발광 박스 반크기 (0=없음)
     float    _cbPad1;
     float    emissBoxCenter[3];   // 발광 박스 중심
-    float    _cbPad2;
+    uint32_t debugMode;           // 0=PT, 1=Fresnel map
 };
 // 검증: 64+32+32+64+16+16+16+16 = 256
 static_assert(sizeof(SceneCB) == 256, "SceneCB must be 256 bytes");
