@@ -2,7 +2,7 @@
 #include <print>
 #include <cstring>
 #include <cmath>
-#include <cstdio>
+#include <fstream>
 #include <vector>
 
 // ---------------------------------------------------------------
@@ -17,43 +17,47 @@ static void SaveBMP(const std::string& path, const uint8_t* rgba,
     const uint32_t imgSize = bmpRow * h;
     const uint32_t fileSz  = 54u + imgSize;
 
-    FILE* f = fopen(path.c_str(), "wb");
+    std::ofstream f(path, std::ios::binary);
     if (!f) { std::println("[App] BMP 파일 열기 실패: {}", path); return; }
+
+    auto write = [&](const void* data, size_t n)
+    {
+        f.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(n));
+    };
 
     // BITMAPFILEHEADER (14 bytes)
     uint8_t fh[14]{};
     fh[0] = 'B'; fh[1] = 'M';
-    std::memcpy(fh + 2,  &fileSz,      4);
+    std::memcpy(fh + 2,  &fileSz,          4);
     constexpr uint32_t k_dataOff = 54u;
-    std::memcpy(fh + 10, &k_dataOff,   4);
-    fwrite(fh, 1, 14, f);
+    std::memcpy(fh + 10, &k_dataOff,       4);
+    write(fh, 14);
 
     // BITMAPINFOHEADER (40 bytes)
     uint8_t ih[40]{};
-    constexpr uint32_t k_hdrSz = 40u;
-    const int32_t  negH   = -(int32_t)h;  // 음수 = top-down
-    constexpr uint16_t k_planes = 1u, k_bpp = 24u;
+    constexpr uint32_t  k_hdrSz  = 40u;
+    const int32_t       negH     = -(int32_t)h;  // 음수 = top-down
+    constexpr uint16_t  k_planes = 1u, k_bpp = 24u;
     std::memcpy(ih +  0, &k_hdrSz,  4);
     std::memcpy(ih +  4, &w,        4);
     std::memcpy(ih +  8, &negH,     4);
     std::memcpy(ih + 12, &k_planes, 2);
     std::memcpy(ih + 14, &k_bpp,    2);
     std::memcpy(ih + 20, &imgSize,  4);
-    fwrite(ih, 1, 40, f);
+    write(ih, 40);
 
     // 픽셀 데이터: RGBA → BGR, top-down
+    const uint8_t pad[3]{};
     for (uint32_t y = 0; y < h; ++y)
     {
         const uint8_t* row = rgba + (size_t)y * srcRowPitch;
         for (uint32_t x = 0; x < w; ++x)
         {
             const uint8_t bgr[3] = { row[x*4+2], row[x*4+1], row[x*4+0] };
-            fwrite(bgr, 1, 3, f);
+            write(bgr, 3);
         }
-        const uint8_t pad[3]{};
-        if (const uint32_t p = bmpRow - w * 3u) fwrite(pad, 1, p, f);
+        if (const uint32_t p = bmpRow - w * 3u) write(pad, p);
     }
-    fclose(f);
 }
 
 // ---------------------------------------------------------------
