@@ -547,12 +547,13 @@ void App::SwitchScene(uint32_t id)
     }
     else if (m_sceneID == 3)
     {
-        // 씬 3 (Fresnel 쇼케이스): 크롬 미러 바닥 + 유리·골드 구
-        // 낮은 카메라 시점 → 바닥 grazing angle → F(p) 극대화
+        // 씬 3 (Fresnel 쇼케이스): 닫힌 방 + 크롬 바닥 + 유리·골드 구
+        // 흰 벽으로 공간을 닫아 간접광 순환 → 자연 밝기 확보
+        // 낮은 시점 → 바닥 grazing angle → F(p) 극대화
         std::println("[App] 씬 3 (Fresnel 쇼케이스) 전환");
         m_camera.Init(0.0f, 0.35f, -3.5f, 0.08f, 0.0f);
 
-        TLASInstance instances[4]{};
+        TLASInstance instances[7]{};
 
         // 크롬 미러 바닥 (mat0)
         MakeIdentityTransform(instances[0].transform);
@@ -560,26 +561,47 @@ void App::SwitchScene(uint32_t id)
         instances[0].instanceID   = EncodeID(0, 0);
         instances[0].mask         = 0xFF;
 
-        // 어두운 배경 벽 (mat3) — 뒤쪽
+        // 왼쪽 벽 (mat3 흰색)
         MakeScaleTranslateTransform(instances[1].transform,
-            9.0f, 5.0f, 0.3f,  0.0f, 2.5f, 5.5f);
+            0.3f, 7.0f, 14.0f,  -5.0f, 3.0f, 1.0f);
         instances[1].blasResource = m_cubeBLAS.Resource();
         instances[1].instanceID   = EncodeID(1, 3);
         instances[1].mask         = 0xFF;
 
-        // 골드 메탈릭 구 (mat1) — 왼쪽
+        // 오른쪽 벽 (mat3 흰색)
         MakeScaleTranslateTransform(instances[2].transform,
-            0.6f, 0.6f, 0.6f,  -1.3f, 0.6f, 1.5f);
-        instances[2].blasResource = m_sphereBLAS.Resource();
-        instances[2].instanceID   = EncodeID(3, 1);
+            0.3f, 7.0f, 14.0f,  5.0f, 3.0f, 1.0f);
+        instances[2].blasResource = m_cubeBLAS.Resource();
+        instances[2].instanceID   = EncodeID(1, 3);
         instances[2].mask         = 0xFF;
 
-        // 유리 구 (mat2) — 오른쪽
+        // 천장 (mat3 흰색)
         MakeScaleTranslateTransform(instances[3].transform,
+            10.6f, 0.3f, 14.0f,  0.0f, 6.0f, 1.0f);
+        instances[3].blasResource = m_cubeBLAS.Resource();
+        instances[3].instanceID   = EncodeID(1, 3);
+        instances[3].mask         = 0xFF;
+
+        // 뒷벽 (mat3 흰색)
+        MakeScaleTranslateTransform(instances[4].transform,
+            10.6f, 7.0f, 0.3f,  0.0f, 3.0f, 8.0f);
+        instances[4].blasResource = m_cubeBLAS.Resource();
+        instances[4].instanceID   = EncodeID(1, 3);
+        instances[4].mask         = 0xFF;
+
+        // 골드 메탈릭 구 (mat1) — 왼쪽
+        MakeScaleTranslateTransform(instances[5].transform,
+            0.6f, 0.6f, 0.6f,  -1.3f, 0.6f, 1.5f);
+        instances[5].blasResource = m_sphereBLAS.Resource();
+        instances[5].instanceID   = EncodeID(3, 1);
+        instances[5].mask         = 0xFF;
+
+        // 유리 구 (mat2) — 오른쪽
+        MakeScaleTranslateTransform(instances[6].transform,
             0.65f, 0.65f, 0.65f,  1.3f, 0.65f, 1.5f);
-        instances[3].blasResource = m_sphereBLAS.Resource();
-        instances[3].instanceID   = EncodeID(3, 2);
-        instances[3].mask         = 0x02; // 그림자 레이 제외 (유리)
+        instances[6].blasResource = m_sphereBLAS.Resource();
+        instances[6].instanceID   = EncodeID(3, 2);
+        instances[6].mask         = 0x02; // 유리 — 그림자 레이 제외
 
         m_tlas.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ instances });
@@ -810,18 +832,17 @@ void App::UpdateSceneCB()
     }
     else if (m_sceneID == 3)
     {
-        // ── 씬 3 (Fresnel 쇼케이스): 측면 포인트 라이트 ──
-        // 왼쪽 측면 광원 — 드라마틱 스페큘러 + grazing angle Fresnel
-        cb.lightPos[0]=-4.0f; cb.lightPos[1]=3.0f; cb.lightPos[2]=1.0f;
-        cb.lightIntensity=12.0f;
-        cb.lightColor[0]=1.0f; cb.lightColor[1]=0.95f; cb.lightColor[2]=0.88f; // 따뜻한 흰빛
+        // ── 씬 3 (Fresnel 쇼케이스): 닫힌 방 + 측면 포인트 라이트 ──
+        // 흰 벽이 간접광을 순환 → 씬 자연 밝기 확보
+        cb.lightPos[0]=-3.5f; cb.lightPos[1]=4.5f; cb.lightPos[2]=2.0f;
+        cb.lightIntensity=20.0f;
+        cb.lightColor[0]=1.0f; cb.lightColor[1]=0.95f; cb.lightColor[2]=0.88f;
 
-        // 오른쪽 보조 광원
-        cb.light2Pos[0]=3.5f; cb.light2Pos[1]=2.5f; cb.light2Pos[2]=0.5f;
-        cb.light2Intensity=6.0f;
-        cb.light2Color[0]=0.85f; cb.light2Color[1]=0.90f; cb.light2Color[2]=1.00f; // 차가운 보조광
+        cb.light2Pos[0]=3.5f; cb.light2Pos[1]=4.0f; cb.light2Pos[2]=1.0f;
+        cb.light2Intensity=12.0f;
+        cb.light2Color[0]=0.85f; cb.light2Color[1]=0.90f; cb.light2Color[2]=1.00f;
 
-        // mat0: 크롬 미러 바닥 — roughness 극소, 완전 메탈릭
+        // mat0: 크롬 미러 바닥
         cb.matAlbedoRoughness[0][0]=0.88f; cb.matAlbedoRoughness[0][1]=0.88f;
         cb.matAlbedoRoughness[0][2]=0.88f; cb.matAlbedoRoughness[0][3]=0.02f;
         cb.matMetallic[0] = 1.0f;
@@ -839,9 +860,9 @@ void App::UpdateSceneCB()
         cb.matMetallic[2] = 0.0f;
         cb.matEmissive[2] = -2.0f; // 유리 신호 (IOR=1.5)
 
-        // mat3: 어두운 매트 배경 — Fresnel 효과 대비 극대화
-        cb.matAlbedoRoughness[3][0]=0.04f; cb.matAlbedoRoughness[3][1]=0.04f;
-        cb.matAlbedoRoughness[3][2]=0.06f; cb.matAlbedoRoughness[3][3]=0.95f;
+        // mat3: 흰 벽/천장 — 간접광 순환용 고albedo
+        cb.matAlbedoRoughness[3][0]=0.90f; cb.matAlbedoRoughness[3][1]=0.90f;
+        cb.matAlbedoRoughness[3][2]=0.90f; cb.matAlbedoRoughness[3][3]=0.90f;
         cb.matMetallic[3] = 0.0f;
         cb.matEmissive[3] = 0.0f;
 
