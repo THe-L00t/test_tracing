@@ -559,13 +559,13 @@ void ClosestHit(inout RayPayload payload,
     uint seed = payload.seed;
 
     // ── F(p): Fresnel 우선도 맵 (bounce 0에서만 기록) ────────────
-    // 유리/거울의 grazing-angle Fresnel transition 영역을 강조
+    // 유전체(유리·반투명) 및 금속 표면의 grazing-angle Fresnel transition 강조
     if (payload.depth == 0u)
     {
-        float fresnelTerm   = pow(1.0f - saturate(dot(N, V)), 5.0f);
-        float surfaceFactor = saturate(1.0f - roughness);
-        float glassFlag     = (emissive < -1.5f) ? 1.0f : 0.0f;
-        float specWeight    = saturate(metallic + glassFlag * 2.0f);
+        float fresnelTerm    = pow(1.0f - saturate(dot(N, V)), 5.0f);
+        float surfaceFactor  = saturate(1.0f - roughness);
+        float dielectricFlag = (emissive < -0.5f) ? 1.0f : 0.0f;  // 유리 + 반투명
+        float specWeight     = saturate(metallic + dielectricFlag * 2.0f);
         g_fresnel[DispatchRaysIndex().xy] = fresnelTerm * surfaceFactor * specWeight;
     }
 
@@ -602,34 +602,43 @@ void ClosestHit(inout RayPayload payload,
         }
         else
         {
-            // 반투명 (확산 50% + 투과 50%)
+            // 반투명 — 물리 기반 Fresnel + SSS 근사 (IOR=1.3)
+            // entering: Schlick Fresnel → specular reflect 또는 내부 cosine scatter
+            // exiting:  직진 투과 (내부 산란 완료 근사)
+            float ior      = 1.3f;
+            float r0       = (1.0f - ior) / (1.0f + ior);
+            r0             = r0 * r0;
+            float cosTheta = max(dot(N, V), 0.0f);
+            float fresnel  = r0 + (1.0f - r0) * pow(1.0f - cosTheta, 5.0f);
+
             float3 scatterDir;
             float3 atten;
 
-            if (entering)
+            if (entering && RandFloat(seed) < fresnel)
             {
-                if (RandFloat(seed) < 0.5f)
-                {
-                    float2 u   = float2(RandFloat(seed), RandFloat(seed));
-                    scatterDir = CosineSampleHemisphere(u, N);
-                    atten      = albedo;
-                }
-                else
-                {
-                    scatterDir = normalize(WorldRayDirection());
-                    atten      = albedo * 0.85f;
-                }
-                // 반투명 표면 직접광 (단순 근사)
+                // 표면 specular 반사 (grazing angle일수록 확률 증가)
+                scatterDir       = reflect(normalize(WorldRayDirection()), N);
+                atten            = float3(1.0f, 1.0f, 1.0f);
+                payload.emission = float3(0.0f, 0.0f, 0.0f);
+            }
+            else if (entering)
+            {
+                // 내부 진입 → SSS 근사: 내부 방향으로 cosine 산란
+                float2 u   = float2(RandFloat(seed), RandFloat(seed));
+                scatterDir = CosineSampleHemisphere(u, -N);
+                atten      = albedo;
+                // 직접광 근사 (투과 비율 반영)
                 float3 toL   = lightPos - hitPos;
                 float  dist  = max(length(toL), 0.01f);
                 float3 L     = toL / dist;
                 float  NdotL = max(dot(N, L), 0.0f);
                 float  attn  = lightIntensity / (dist * dist);
                 float  vis   = ShadowVis(hitPos + N * 0.001f, L, dist - 0.01f);
-                payload.emission = albedo * 0.5f * NdotL * lightColor * attn * vis;
+                payload.emission = albedo * (1.0f - fresnel) * NdotL * lightColor * attn * vis;
             }
             else
             {
+                // 내부 → 외부: 직진 투과
                 scatterDir       = normalize(WorldRayDirection());
                 atten            = albedo * 0.90f;
                 payload.emission = float3(0.0f, 0.0f, 0.0f);
