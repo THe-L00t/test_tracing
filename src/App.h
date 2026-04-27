@@ -80,7 +80,7 @@ private:
     // 연구용 디버그 모드 (V키 순환)
     // 0=PT, 1=Fresnel, 2=Var, 3=DepthEdge, 4=NormalEdge, 5=ThresholdMask
     uint32_t m_debugMode         = 0;
-    float    m_fresnelThreshold  = 0.10f;  // [/] 키로 ±0.05 조정
+    float    m_fresnelThreshold  = 0.05f;  // [/] 키로 ±0.05 조정
 
     // 마우스 캡처
     HWND     m_hwnd          = nullptr;
