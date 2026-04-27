@@ -686,6 +686,113 @@ void App::SwitchScene(uint32_t id)
         m_tlas.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ instances });
     }
+    else if (m_sceneID == 5)
+    {
+        // 씬 6 (Glass+Gold+Checker): 체커 방 + 유리 슬랩 + 폴리시드 골드 구 + 면광원
+        // 유리 판 뒤 체커 패턴 왜곡 → Fresnel prior 효과 논문 Figure 1 후보
+        std::println("[App] 씬 5 (Glass+Gold+Checker) 전환");
+        m_camera.Init(0.3f, 0.85f, -2.4f, -0.15f, 0.05f);
+
+        TLASInstance instances[4]{};
+
+        // 체커 방 (mat0, shader에서 절차적 체커 적용)
+        MakeIdentityTransform(instances[0].transform);
+        instances[0].blasResource = m_roomBLAS.Resource();
+        instances[0].instanceID   = EncodeID(2, 0);
+        instances[0].mask         = 0xFF;
+
+        // 얇은 유리 판 — 세로 슬랩, 카메라 정면 (mat1=glass)
+        MakeScaleTranslateTransform(instances[1].transform,
+            1.8f, 1.8f, 0.04f,  0.0f, 0.9f, 0.25f);
+        instances[1].blasResource = m_cubeBLAS.Resource();
+        instances[1].instanceID   = EncodeID(1, 1);
+        instances[1].mask         = 0x02;
+
+        // 폴리시드 골드 구 — 유리 뒤 왼쪽 (mat2=gold)
+        MakeScaleTranslateTransform(instances[2].transform,
+            0.45f, 0.45f, 0.45f,  -0.8f, 0.45f, 1.1f);
+        instances[2].blasResource = m_sphereBLAS.Resource();
+        instances[2].instanceID   = EncodeID(3, 2);
+        instances[2].mask         = 0xFF;
+
+        // 천장 면광원 (mat3=emissive)
+        MakeScaleTranslateTransform(instances[3].transform,
+            0.8f, 0.08f, 0.8f,  0.0f, 3.85f, 0.4f);
+        instances[3].blasResource = m_cubeBLAS.Resource();
+        instances[3].instanceID   = EncodeID(1, 3);
+        instances[3].mask         = 0xFF;
+
+        m_tlas.Build(m_core.Device(), m_core.CmdList(), std::span{ instances });
+    }
+    else if (m_sceneID == 6)
+    {
+        // 씬 7 (Grazing Mirror+Stripe): 매우 낮은 시점, 크롬 바닥, 줄무늬 벽
+        // 골드+유리 구 → 미러 반사·Fresnel grazing angle 극대화
+        std::println("[App] 씬 6 (Grazing Mirror+Stripe) 전환");
+        m_camera.Init(0.0f, 0.2f, -3.2f, 0.0f, 0.08f);
+
+        TLASInstance instances[3]{};
+
+        // 줄무늬/크롬 방 (mat0, shader: y<0.05 → 크롬, 나머지 → 파랑 줄무늬)
+        MakeIdentityTransform(instances[0].transform);
+        instances[0].blasResource = m_roomBLAS.Resource();
+        instances[0].instanceID   = EncodeID(2, 0);
+        instances[0].mask         = 0xFF;
+
+        // 폴리시드 골드 구 (mat1=gold)
+        MakeScaleTranslateTransform(instances[1].transform,
+            0.5f, 0.5f, 0.5f,  -0.9f, 0.5f, 1.5f);
+        instances[1].blasResource = m_sphereBLAS.Resource();
+        instances[1].instanceID   = EncodeID(3, 1);
+        instances[1].mask         = 0xFF;
+
+        // 유리 구 — 오른쪽 (mat2=glass)
+        MakeScaleTranslateTransform(instances[2].transform,
+            0.5f, 0.5f, 0.5f,  0.9f, 0.5f, 1.5f);
+        instances[2].blasResource = m_sphereBLAS.Resource();
+        instances[2].instanceID   = EncodeID(3, 2);
+        instances[2].mask         = 0x02;
+
+        m_tlas.Build(m_core.Device(), m_core.CmdList(), std::span{ instances });
+    }
+    else if (m_sceneID == 7)
+    {
+        // 씬 8 (Glass+Backlit+Checker): 유리 구 + 백라이트 패널 + 골드 구 + 체커 방
+        // 유리 구가 밝은 패널 빛을 굴절·집중 → 굴절 오차 즉시 시각화
+        std::println("[App] 씬 7 (Glass+Backlit+Checker) 전환");
+        m_camera.Init(0.2f, 0.6f, -2.0f, -0.1f, 0.05f);
+
+        TLASInstance instances[4]{};
+
+        // 체커 방 (mat0)
+        MakeIdentityTransform(instances[0].transform);
+        instances[0].blasResource = m_roomBLAS.Resource();
+        instances[0].instanceID   = EncodeID(2, 0);
+        instances[0].mask         = 0xFF;
+
+        // 유리 구 — 중앙 (mat1=glass)
+        MakeScaleTranslateTransform(instances[1].transform,
+            0.5f, 0.5f, 0.5f,  0.0f, 0.5f, 0.5f);
+        instances[1].blasResource = m_sphereBLAS.Resource();
+        instances[1].instanceID   = EncodeID(3, 1);
+        instances[1].mask         = 0x02;
+
+        // 골드 구 — 왼쪽 (mat2=gold)
+        MakeScaleTranslateTransform(instances[2].transform,
+            0.4f, 0.4f, 0.4f,  -0.9f, 0.4f, 0.7f);
+        instances[2].blasResource = m_sphereBLAS.Resource();
+        instances[2].instanceID   = EncodeID(3, 2);
+        instances[2].mask         = 0xFF;
+
+        // 밝은 백라이트 패널 — 유리 구 뒤 (mat3=emissive)
+        MakeScaleTranslateTransform(instances[3].transform,
+            1.2f, 1.2f, 0.04f,  0.0f, 0.9f, 1.6f);
+        instances[3].blasResource = m_cubeBLAS.Resource();
+        instances[3].instanceID   = EncodeID(1, 3);
+        instances[3].mask         = 0xFF;
+
+        m_tlas.Build(m_core.Device(), m_core.CmdList(), std::span{ instances });
+    }
     else
     {
         // 씬 1 (실내): 방 + 큐브
@@ -947,6 +1054,105 @@ void App::UpdateSceneCB()
         cb.emissBoxCenter[1]   = 3.88f;
         cb.emissBoxCenter[2]   = 0.5f;
     }
+    else if (m_sceneID == 5)
+    {
+        // ── 씬 6 (Glass+Gold+Checker): 천장 면광원만 사용 ──
+        cb.lightPos[0]=0.0f; cb.lightPos[1]=3.85f; cb.lightPos[2]=0.4f;
+        cb.lightIntensity  = 0.0f;
+        cb.lightColor[0]=1.0f; cb.lightColor[1]=1.0f; cb.lightColor[2]=1.0f;
+        cb.light2Intensity = 0.0f;
+
+        // mat0: 체커 방 (base albedo, shader가 덮어씀)
+        cb.matAlbedoRoughness[0][0]=0.85f; cb.matAlbedoRoughness[0][1]=0.85f;
+        cb.matAlbedoRoughness[0][2]=0.85f; cb.matAlbedoRoughness[0][3]=0.90f;
+        cb.matMetallic[0] = 0.0f; cb.matEmissive[0] = 0.0f;
+
+        // mat1: 유리 판 (IOR=1.5)
+        cb.matAlbedoRoughness[1][0]=0.97f; cb.matAlbedoRoughness[1][1]=0.98f;
+        cb.matAlbedoRoughness[1][2]=1.00f; cb.matAlbedoRoughness[1][3]=0.01f;
+        cb.matMetallic[1] = 0.0f; cb.matEmissive[1] = -2.0f;
+
+        // mat2: 폴리시드 골드 구
+        cb.matAlbedoRoughness[2][0]=1.00f; cb.matAlbedoRoughness[2][1]=0.71f;
+        cb.matAlbedoRoughness[2][2]=0.29f; cb.matAlbedoRoughness[2][3]=0.04f;
+        cb.matMetallic[2] = 1.0f; cb.matEmissive[2] = 0.0f;
+
+        // mat3: 면광원 (밝은 따뜻한 빛)
+        cb.matAlbedoRoughness[3][0]=1.00f; cb.matAlbedoRoughness[3][1]=0.95f;
+        cb.matAlbedoRoughness[3][2]=0.88f; cb.matAlbedoRoughness[3][3]=1.00f;
+        cb.matMetallic[3] = 0.0f; cb.matEmissive[3] = 10.0f;
+
+        cb.emissBoxHalfSize  = 0.4f;
+        cb.emissBoxCenter[0] = 0.0f;
+        cb.emissBoxCenter[1] = 3.85f;
+        cb.emissBoxCenter[2] = 0.4f;
+    }
+    else if (m_sceneID == 6)
+    {
+        // ── 씬 7 (Grazing Mirror+Stripe): 포인트 라이트 2개 (좌/우 측광) ──
+        cb.lightPos[0]=-3.0f; cb.lightPos[1]=4.0f; cb.lightPos[2]=1.5f;
+        cb.lightIntensity=25.0f;
+        cb.lightColor[0]=1.0f; cb.lightColor[1]=0.95f; cb.lightColor[2]=0.85f;
+
+        cb.light2Pos[0]=3.0f; cb.light2Pos[1]=4.0f; cb.light2Pos[2]=1.5f;
+        cb.light2Intensity=15.0f;
+        cb.light2Color[0]=0.85f; cb.light2Color[1]=0.90f; cb.light2Color[2]=1.00f;
+
+        // mat0: 방 (shader: y<0.05→크롬, 나머지→줄무늬, base는 크롬 값)
+        cb.matAlbedoRoughness[0][0]=0.87f; cb.matAlbedoRoughness[0][1]=0.87f;
+        cb.matAlbedoRoughness[0][2]=0.87f; cb.matAlbedoRoughness[0][3]=0.02f;
+        cb.matMetallic[0] = 1.0f; cb.matEmissive[0] = 0.0f;
+
+        // mat1: 골드 구
+        cb.matAlbedoRoughness[1][0]=1.00f; cb.matAlbedoRoughness[1][1]=0.71f;
+        cb.matAlbedoRoughness[1][2]=0.29f; cb.matAlbedoRoughness[1][3]=0.04f;
+        cb.matMetallic[1] = 1.0f; cb.matEmissive[1] = 0.0f;
+
+        // mat2: 유리 구 (IOR=1.5)
+        cb.matAlbedoRoughness[2][0]=0.97f; cb.matAlbedoRoughness[2][1]=0.98f;
+        cb.matAlbedoRoughness[2][2]=1.00f; cb.matAlbedoRoughness[2][3]=0.01f;
+        cb.matMetallic[2] = 0.0f; cb.matEmissive[2] = -2.0f;
+
+        // mat3: (미사용 — 흰 벽 기본)
+        cb.matAlbedoRoughness[3][0]=0.90f; cb.matAlbedoRoughness[3][1]=0.90f;
+        cb.matAlbedoRoughness[3][2]=0.90f; cb.matAlbedoRoughness[3][3]=0.90f;
+        cb.matMetallic[3] = 0.0f; cb.matEmissive[3] = 0.0f;
+
+        cb.emissBoxHalfSize = 0.0f;
+    }
+    else if (m_sceneID == 7)
+    {
+        // ── 씬 8 (Glass+Backlit+Checker): 백라이트 패널이 주 광원 ──
+        cb.lightPos[0]=0.0f; cb.lightPos[1]=3.85f; cb.lightPos[2]=0.5f;
+        cb.lightIntensity  = 0.0f;
+        cb.light2Intensity = 0.0f;
+        cb.lightColor[0]=1.0f; cb.lightColor[1]=1.0f; cb.lightColor[2]=1.0f;
+
+        // mat0: 체커 방
+        cb.matAlbedoRoughness[0][0]=0.85f; cb.matAlbedoRoughness[0][1]=0.85f;
+        cb.matAlbedoRoughness[0][2]=0.85f; cb.matAlbedoRoughness[0][3]=0.90f;
+        cb.matMetallic[0] = 0.0f; cb.matEmissive[0] = 0.0f;
+
+        // mat1: 유리 구 (IOR=1.5)
+        cb.matAlbedoRoughness[1][0]=0.97f; cb.matAlbedoRoughness[1][1]=0.98f;
+        cb.matAlbedoRoughness[1][2]=1.00f; cb.matAlbedoRoughness[1][3]=0.01f;
+        cb.matMetallic[1] = 0.0f; cb.matEmissive[1] = -2.0f;
+
+        // mat2: 골드 구
+        cb.matAlbedoRoughness[2][0]=1.00f; cb.matAlbedoRoughness[2][1]=0.71f;
+        cb.matAlbedoRoughness[2][2]=0.29f; cb.matAlbedoRoughness[2][3]=0.04f;
+        cb.matMetallic[2] = 1.0f; cb.matEmissive[2] = 0.0f;
+
+        // mat3: 밝은 백라이트 패널 (유리 구 뒤)
+        cb.matAlbedoRoughness[3][0]=1.00f; cb.matAlbedoRoughness[3][1]=0.96f;
+        cb.matAlbedoRoughness[3][2]=0.90f; cb.matAlbedoRoughness[3][3]=1.00f;
+        cb.matMetallic[3] = 0.0f; cb.matEmissive[3] = 15.0f;
+
+        cb.emissBoxHalfSize  = 0.6f;
+        cb.emissBoxCenter[0] = 0.0f;
+        cb.emissBoxCenter[1] = 0.9f;
+        cb.emissBoxCenter[2] = 1.6f;
+    }
     else
     {
         // ── 씬 2 (투명/반투명 구 쇼케이스): 포인트 라이트 2개 ──
@@ -1020,6 +1226,9 @@ void App::OnKeyDown(uint32_t key)
     else if (key == '3') SwitchScene(2);
     else if (key == '4') SwitchScene(3);
     else if (key == '5') SwitchScene(4);
+    else if (key == '6') SwitchScene(5);
+    else if (key == '7') SwitchScene(6);
+    else if (key == '8') SwitchScene(7);
     else if (key == 'R')
     {
         m_denoiseEnabled        = !m_denoiseEnabled;

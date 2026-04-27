@@ -712,6 +712,42 @@ void ClosestHit(inout RayPayload payload,
     float  roughness = matAlbedoRoughness[matIdx].w;
     float  emissive  = matEmissive[matIdx];
 
+    // ── 씬별 절차적 텍스처 (sceneID 5~7) ───────────────────────────
+    if (sceneID >= 5u && matIdx == 0u)
+    {
+        if (sceneID == 6u)
+        {
+            // 씬 7: 바닥=크롬 미러, 벽=파란 세로 줄무늬
+            if (hitPos.y < 0.05f)
+            {
+                albedo    = float3(0.87f, 0.87f, 0.87f);
+                roughness = 0.01f;
+                metallic  = 1.0f;
+            }
+            else
+            {
+                int stripe = (int)floor(hitPos.x * 2.5f);
+                albedo    = ((stripe & 1) != 0)
+                    ? float3(0.05f, 0.08f, 0.45f)
+                    : float3(0.92f, 0.92f, 0.92f);
+                roughness = 0.90f;
+                metallic  = 0.0f;
+            }
+        }
+        else
+        {
+            // 씬 6, 8: 흑백 체커보드
+            int cx = (int)floor(hitPos.x * 2.0f);
+            int cy = (int)floor(hitPos.y * 2.0f);
+            int cz = (int)floor(hitPos.z * 2.0f);
+            albedo    = (((cx + cy + cz) & 1) != 0)
+                ? float3(0.05f, 0.05f, 0.05f)
+                : float3(0.92f, 0.92f, 0.92f);
+            roughness = 0.85f;
+            metallic  = 0.0f;
+        }
+    }
+
     uint seed = payload.seed;
 
     // ── F(p) + GBuffer 기록 (Pass1 bounce 0에서만) ──────────────────
