@@ -504,6 +504,17 @@ float3 TracePath(uint2 idx, uint2 dim, inout uint seed)
 }
 
 // ── RayGen – Pass1(균일 1spp) / Pass2(Fresnel-guided 추가 spp) ──
+// 출력 전용 temporal firefly 억제: 이번 프레임 값이 이전 프레임 평균 대비
+// 4배 이상 밝으면 이전 평균을 대신 출력. 누적 버퍼는 건드리지 않음.
+float3 TemporalDisplay(float3 accumulated, float3 prevAccum, uint fc)
+{
+    static const float3 k_lum_td = float3(0.299f, 0.587f, 0.114f);
+    if (fc == 0u) return accumulated;
+    float lumPrev = dot(prevAccum,   k_lum_td);
+    float lumAcc  = dot(accumulated, k_lum_td);
+    return (lumAcc > lumPrev * 4.0f + 0.1f) ? prevAccum : accumulated;
+}
+
 // debugMode 인코딩: 하위 8비트 = actualMode(0~5), 비트8 = passIndex(0/1)
 [shader("raygeneration")]
 void RayGen()
@@ -543,10 +554,10 @@ void RayGen()
         float3 blended = lerp(prev, extra, w);
         g_accumulation[idx] = float4(blended, 1.0f);
 
-        // PT 모드일 때만 g_output 갱신 (표시용만 클램프, 누적 버퍼는 그대로)
+        // PT 모드일 때만 g_output 갱신 (표시용만 클램프+temporal, 누적 버퍼는 그대로)
         if (actualMode == 0u)
         {
-            float3 display = min(blended, k_displayClamp);
+            float3 display = min(TemporalDisplay(blended, prev, frameCount), k_displayClamp);
             float3 color = display / (display + 1.0f);
             color = pow(max(color, 0.0f), 1.0f / 2.2f);
             g_output[idx] = float4(color, 1.0f);
@@ -602,7 +613,7 @@ void RayGen()
     }
     else if (actualMode == 5u)
     {
-        float3 display = min(accumulated, k_displayClamp);
+        float3 display = min(TemporalDisplay(accumulated, prevAccum, frameCount), k_displayClamp);
         float3 color = display / (display + 1.0f);
         color = pow(max(color, 0.0f), 1.0f / 2.2f);
         if (g_fresnel[idx] > fresnelThreshold)
@@ -611,7 +622,7 @@ void RayGen()
     }
     else
     {
-        float3 display = min(accumulated, k_displayClamp);
+        float3 display = min(TemporalDisplay(accumulated, prevAccum, frameCount), k_displayClamp);
         float3 color = display / (display + 1.0f);
         color = pow(max(color, 0.0f), 1.0f / 2.2f);
         g_output[idx] = float4(color, 1.0f);
