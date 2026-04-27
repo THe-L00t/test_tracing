@@ -10,7 +10,11 @@
       "mcp__claude_ai_Notion__notion-search",
       "mcp__claude_ai_Notion__notion-fetch",
       "mcp__claude_ai_Notion__notion-create-pages",
-      "Bash(python compare.py --gt screenshot_fresnel_10000spp.bmp --a screenshot_baseline_00100spp.bmp --b screenshot_fresnel_00100spp.bmp)"
+      "Bash(python compare.py --gt screenshot_fresnel_10000spp.bmp --a screenshot_baseline_00100spp.bmp --b screenshot_fresnel_00100spp.bmp)",
+      "Bash(python compare.py --gt screenshot_fresnel_10000spp.bmp --a screenshot_baseline_00440spp.bmp --b screenshot_fresnel_00444spp.bmp)",
+      "Bash(python -c ' *)",
+      "mcp__claude_ai_Notion__notion-update-page",
+      "Bash(git commit -m 'fix: 체커 원형 띠 제거 — 3D 등값면 → 법선 기반 2D 투영 *)"
     ]
   }
 }
