@@ -504,15 +504,19 @@ float3 TracePath(uint2 idx, uint2 dim, inout uint seed)
 }
 
 // ── RayGen – Pass1(균일 1spp) / Pass2(Fresnel-guided 추가 spp) ──
-// 출력 전용 temporal firefly 억제: 이번 프레임 값이 이전 프레임 평균 대비
-// 4배 이상 밝으면 이전 평균을 대신 출력. 누적 버퍼는 건드리지 않음.
+// 출력 전용 temporal firefly 억제.
+// spike 강도(ratio)에 비례해 prevAccum 쪽으로 부드럽게 보간.
+// ratio=1(정상): accumulated 그대로. ratio 클수록 prevAccum에 가까워짐.
+// 누적 버퍼는 건드리지 않음. prevAccum은 이미 읽은 로컬 변수라 race condition 없음.
 float3 TemporalDisplay(float3 accumulated, float3 prevAccum, uint fc)
 {
     static const float3 k_lum_td = float3(0.299f, 0.587f, 0.114f);
     if (fc == 0u) return accumulated;
     float lumPrev = dot(prevAccum,   k_lum_td);
     float lumAcc  = dot(accumulated, k_lum_td);
-    return (lumAcc > lumPrev * 2.0f + 0.1f) ? prevAccum : accumulated;
+    float ratio   = lumAcc / (lumPrev + 0.01f);          // 이번 프레임이 몇 배 밝은지
+    float alpha   = saturate(1.0f / max(ratio, 1.0f));   // ratio=1→1.0, ratio=4→0.25
+    return lerp(prevAccum, accumulated, alpha);
 }
 
 // debugMode 인코딩: 하위 8비트 = actualMode(0~5), 비트8 = passIndex(0/1)
