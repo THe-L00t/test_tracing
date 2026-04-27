@@ -542,9 +542,14 @@ void RayGen()
     else if (debugMode == 2u)
     {
         // 통계적 분산: E[X²] - E[X]²  (수렴할수록 정확)
+        // Reinhard soft saturation: sigma / (sigma + 0.05)
+        //   sigma=0    → 0.0 (완전 수렴, 검정)
+        //   sigma=0.05 → 0.5 (중간 노이즈, 회색)
+        //   sigma=0.5  → 0.91 (고노이즈, 밝은 회색)
+        //   포화 없음 → 낮은/높은 분산 영역 구분 가능
         float lumMean = dot(accumulated, k_lum);
-        float variance = max(accumulatedSq - lumMean * lumMean, 0.0f);
-        float v = saturate(sqrt(variance) * 4.0f);
+        float sigma   = sqrt(max(accumulatedSq - lumMean * lumMean, 0.0f));
+        float v       = sigma / (sigma + 0.05f);
         g_output[idx] = float4(v, v, v, 1.0f);
     }
     else if (debugMode == 3u)
