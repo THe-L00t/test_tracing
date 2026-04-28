@@ -549,20 +549,25 @@ void RayGen()
             float variance = max(g_accumSq[idx] - lumMean * lumMean, 0.0f);
             priority = variance / (variance + 0.5f);
         }
-        if (priority <= fresnelThreshold) return;  // 저-우선도 픽셀 조기 종료
+        // Stochastic allocation: priority를 확률 분포로 해석 (hard threshold 제거)
+        // E[extraSPP] = priority × k_maxExtraSPP → 연속적, 경계 아티팩트 없음
+        static const uint k_maxExtraSPP = 4u;
+        float  budget   = saturate(priority) * float(k_maxExtraSPP);
+        uint   extraSPP = uint(budget);
+        if (RandFloat(seed) < frac(budget)) extraSPP += 1u;
+        if (extraSPP == 0u) return;  // priority≈0 픽셀은 확률적으로 조기 종료
 
-        static const uint k_extraSpp = 4u;
         float3 extra = (float3)0;
-        for (uint s = 0u; s < k_extraSpp; ++s)
+        for (uint s = 0u; s < extraSPP; ++s)
         {
             uint s_seed = WangHash(seed ^ (s * 0x9E3779B9u + 0xDEADBEEFu));
             extra += TracePath(idx, dim, s_seed);
         }
-        extra /= float(k_extraSpp);
+        extra /= float(extraSPP);
 
-        // 가중 평균: Pass1 (frameCount+1)샘플 + Pass2 k_extraSpp샘플
+        // 가중 평균: Pass1 (frameCount+1)샘플 + Pass2 extraSPP샘플 (가변)
         uint   N       = frameCount + 1u;
-        float  w       = float(k_extraSpp) / float(N + k_extraSpp);
+        float  w       = float(extraSPP) / float(N + extraSPP);
         float3 prev    = g_accumulation[idx].rgb;
         float3 blended = lerp(prev, extra, w);
         g_accumulation[idx] = float4(blended, 1.0f);
