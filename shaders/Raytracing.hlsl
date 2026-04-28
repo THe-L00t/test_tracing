@@ -533,9 +533,6 @@ void RayGen()
     // debugMode 비트9 = pass2Mode (0=Fresnel, 1=Variance)
     if (passIdx == 1u)
     {
-        // 카메라 이동 직후(frameCount<2)는 비활성화 — 5spp vs 1spp 시각 어색함 방지
-        if (frameCount < 2u) return;
-
         uint pass2Mode = (debugMode >> 9u) & 0x1u;
         float priority;
         if (pass2Mode == 0u)
@@ -551,7 +548,7 @@ void RayGen()
         }
         // Stochastic allocation: priority를 확률 분포로 해석 (hard threshold 제거)
         // E[extraSPP] = priority × k_maxExtraSPP → 연속적, 경계 아티팩트 없음
-        static const uint k_maxExtraSPP = 4u;
+        static const uint k_maxExtraSPP = 16u;
         float  budget   = saturate(priority) * float(k_maxExtraSPP);
         uint   extraSPP = uint(budget);
         if (RandFloat(seed) < frac(budget)) extraSPP += 1u;
