@@ -23,6 +23,8 @@ public:
     const float* Right()   const noexcept { return m_right; }
     const float* Up()      const noexcept { return m_up; }
     const float* Forward() const noexcept { return m_forward; }
+    float        Yaw()     const noexcept { return m_yaw; }
+    float        Pitch()   const noexcept { return m_pitch; }
 
 private:
     // 요/피치에서 방향 벡터 재계산

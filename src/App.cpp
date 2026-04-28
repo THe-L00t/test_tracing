@@ -1336,6 +1336,51 @@ void App::OnKeyDown(uint32_t key)
             m_pass2Enabled ? "ON" : "OFF",
             m_pass2Enabled ? "Fresnel-guided" : "Baseline (1spp uniform)");
     }
+    else if (key == VK_OEM_COMMA)  // ',' — 녹화 시작/중지
+    {
+        if (m_isPlaying)
+        {
+            std::println("[App] 재생 중 녹화 불가 — '/'로 재생 중지 후 사용");
+            return;
+        }
+        m_isRecording = !m_isRecording;
+        if (m_isRecording)
+        {
+            m_camPath.clear();
+            std::println("[App] 카메라 경로 녹화 시작 (','로 중지)");
+        }
+        else
+        {
+            std::println("[App] 녹화 중지 — {}프레임 기록됨", m_camPath.size());
+        }
+    }
+    else if (key == VK_OEM_PERIOD)  // '.' — 경로 초기화
+    {
+        m_isRecording = false;
+        m_isPlaying   = false;
+        m_playbackIdx = 0;
+        m_camPath.clear();
+        std::println("[App] 카메라 경로 초기화");
+    }
+    else if (key == VK_OEM_2)  // '/' — 재생 시작/중지
+    {
+        if (m_camPath.empty())
+        {
+            std::println("[App] 녹화된 경로 없음 — ','로 먼저 녹화하세요");
+            return;
+        }
+        m_isPlaying = !m_isPlaying;
+        if (m_isPlaying)
+        {
+            m_isRecording = false;
+            m_playbackIdx = 0;
+            std::println("[App] 재생 시작 — {}프레임 경로 (루프)", m_camPath.size());
+        }
+        else
+        {
+            std::println("[App] 재생 중지 ({}번째 프레임에서 정지)", m_playbackIdx);
+        }
+    }
 }
 
 // ---------------------------------------------------------------
@@ -1358,7 +1403,34 @@ void App::OnRender()
 
     constexpr float k_dt = 0.016f;  // 입력 처리용 고정 델타타임
 
-    ProcessInput(k_dt);
+    // 재생 중: 사용자 입력 무시하고 녹화된 경로 적용
+    if (m_isPlaying && !m_camPath.empty())
+    {
+        const CameraState& s = m_camPath[m_playbackIdx];
+        m_camera.Init(s.pos[0], s.pos[1], s.pos[2], s.yaw, s.pitch);
+        m_cameraMoved = true;
+        if (++m_playbackIdx >= static_cast<uint32_t>(m_camPath.size()))
+        {
+            m_playbackIdx = 0;
+            std::println("[App] 경로 재생 루프");
+        }
+    }
+    else
+    {
+        ProcessInput(k_dt);
+    }
+
+    // 녹화 중: 현재 프레임 카메라 상태 기록
+    if (m_isRecording)
+    {
+        CameraState s;
+        s.pos[0] = m_camera.Pos()[0];
+        s.pos[1] = m_camera.Pos()[1];
+        s.pos[2] = m_camera.Pos()[2];
+        s.yaw    = m_camera.Yaw();
+        s.pitch  = m_camera.Pitch();
+        m_camPath.push_back(s);
+    }
 
     // 카메라 이동 시 누적 초기화, 정지 시 프레임 누적
     if (m_cameraMoved)

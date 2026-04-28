@@ -7,6 +7,7 @@
 #include "RenderTarget.h"
 #include "Denoiser.h"
 #include <chrono>
+#include <vector>
 
 class App
 {
@@ -105,4 +106,11 @@ private:
     using Clock = std::chrono::high_resolution_clock;
     Clock::time_point m_lastFrameTime{};
     float             m_smoothFps = 0.0f;
+
+    // 카메라 경로 녹화/재생 (,/.// 키)
+    struct CameraState { float pos[3]; float yaw; float pitch; };
+    std::vector<CameraState> m_camPath;
+    bool     m_isRecording = false;
+    bool     m_isPlaying   = false;
+    uint32_t m_playbackIdx = 0;
 };
