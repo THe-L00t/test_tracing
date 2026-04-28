@@ -529,14 +529,27 @@ void RayGen()
 
     uint seed = WangHash(idx.x + idx.y * dim.x + randomSeed * 719393u);
 
-    // ── Pass 2: Fresnel-guided extra samples ─────────────────────
+    // ── Pass 2: Fresnel/Variance-guided extra samples ─────────────
+    // debugMode 비트9 = pass2Mode (0=Fresnel, 1=Variance)
     if (passIdx == 1u)
     {
         // 카메라 이동 직후(frameCount<2)는 비활성화 — 5spp vs 1spp 시각 어색함 방지
         if (frameCount < 2u) return;
 
-        float fp = g_fresnel[idx];
-        if (fp <= fresnelThreshold) return;  // 저-F 픽셀 조기 종료
+        uint pass2Mode = (debugMode >> 9u) & 0x1u;
+        float priority;
+        if (pass2Mode == 0u)
+        {
+            priority = g_fresnel[idx];
+        }
+        else
+        {
+            // Variance-guided: E[X²] - E[X]² 를 [0,1]로 정규화
+            float lumMean = dot(g_accumulation[idx].rgb, k_lum);
+            float variance = max(g_accumSq[idx] - lumMean * lumMean, 0.0f);
+            priority = variance / (variance + 0.5f);
+        }
+        if (priority <= fresnelThreshold) return;  // 저-우선도 픽셀 조기 종료
 
         static const uint k_extraSpp = 4u;
         float3 extra = (float3)0;

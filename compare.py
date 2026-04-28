@@ -3,18 +3,20 @@ compare.py  —  PSNR / SSIM 비교 스크립트
 Fresnel-Guided PT 연구용
 
 사용법:
-    python compare.py --gt <ground_truth.bmp> --a <baseline.bmp> --b <fresnel.bmp>
+    python compare.py --gt <gt.bmp> --a <baseline.bmp> --b <fresnel.bmp> [--c <variance.bmp>]
 
 예시:
     python compare.py ^
         --gt screenshot_baseline_10000spp.bmp ^
         --a  screenshot_baseline_00100spp.bmp ^
-        --b  screenshot_fresnel_00100spp.bmp
+        --b  screenshot_fresnel_00100spp.bmp ^
+        --c  screenshot_variance_00100spp.bmp
 
 출력:
     - 전체 이미지 PSNR / SSIM
-    - Fresnel 마스크 영역(고F(p)) 크롭 PSNR / SSIM
-    - 차이 이미지 저장 (diff_a.png, diff_b.png)
+    - Fresnel 마스크 영역(고F(p)) PSNR / SSIM
+    - 비-Fresnel 영역(저F(p)) PSNR / SSIM  ← regression 검증용
+    - 차이 이미지 저장 (diff_a.png, diff_b.png [, diff_c.png])
 """
 
 import argparse
@@ -93,7 +95,9 @@ def main():
     parser = argparse.ArgumentParser(description="PSNR/SSIM 비교 — Fresnel-Guided PT")
     parser.add_argument("--gt", required=True, help="Ground truth 이미지 (10000spp baseline)")
     parser.add_argument("--a",  required=True, help="이미지 A (baseline 저spp)")
-    parser.add_argument("--b",  required=True, help="이미지 B (fresnel 저spp)")
+    parser.add_argument("--b",  required=True, help="이미지 B (fresnel-guided 저spp)")
+    parser.add_argument("--c",  default=None,  help="이미지 C (variance-guided 또는 fair-baseline 저spp, 선택)")
+    parser.add_argument("--c-label", default="C (variance)", help="--c 이미지 레이블 (기본: 'C (variance)')")
     parser.add_argument("--percentile", type=float, default=70.0,
                         help="Fresnel 마스크 상위 밝기 퍼센타일 (기본 70)")
     parser.add_argument("--diff-scale", type=float, default=5.0,
@@ -104,52 +108,74 @@ def main():
     gt = load_rgb(args.gt)
     a  = load_rgb(args.a)
     b  = load_rgb(args.b)
+    c  = load_rgb(args.c) if args.c else None
 
-    if gt.shape != a.shape or gt.shape != b.shape:
-        print(f"[오류] 이미지 크기 불일치: gt={gt.shape}, a={a.shape}, b={b.shape}")
-        sys.exit(1)
+    for name, img in [("a", a), ("b", b)] + ([("c", c)] if c is not None else []):
+        if gt.shape != img.shape:
+            print(f"[오류] 이미지 크기 불일치: gt={gt.shape}, {name}={img.shape}")
+            sys.exit(1)
 
     print(f"  해상도: {gt.shape[1]}×{gt.shape[0]}")
     print(f"  GT    : {args.gt}")
     print(f"  A     : {args.a}")
-    print(f"  B     : {args.b}\n")
+    print(f"  B     : {args.b}")
+    if c is not None:
+        print(f"  C     : {args.c}")
+    print()
 
-    mask = luminance_mask(gt, args.percentile)
-    mask_ratio = mask.mean() * 100
-    print(f"[Fresnel 마스크] 상위 밝기 {args.percentile:.0f}% → 전체 픽셀의 {mask_ratio:.1f}% 해당\n")
+    mask     = luminance_mask(gt, args.percentile)
+    non_mask = ~mask
+    print(f"[Fresnel 마스크] 상위 밝기 {args.percentile:.0f}% → "
+          f"고F(p) {mask.mean()*100:.1f}%  /  저F(p) {non_mask.mean()*100:.1f}%\n")
+
+    c_label = args.c_label
 
     print("── 전체 이미지 ───────────────────────────────────────")
-    pa_full, sa_full = report("A (baseline)", gt, a)
-    pb_full, sb_full = report("B (fresnel) ", gt, b)
+    pa_full, sa_full = report("A (baseline)  ", gt, a)
+    pb_full, sb_full = report("B (fresnel)   ", gt, b)
+    if c is not None:
+        pc_full, sc_full = report(f"{c_label:<16}", gt, c)
     delta_p_full = pb_full - pa_full
     delta_s_full = sb_full - sa_full
-    print(f"  {'Δ (B−A)':30}  ΔPSNR={delta_p_full:+.2f} dB   ΔSSIM={delta_s_full:+.4f}")
+    print(f"  {'Δ B−A':30}  ΔPSNR={delta_p_full:+.2f} dB   ΔSSIM={delta_s_full:+.4f}")
+    if c is not None:
+        print(f"  {'Δ C−A':30}  ΔPSNR={pc_full - pa_full:+.2f} dB   ΔSSIM={sc_full - sa_full:+.4f}")
 
-    print("\n── Fresnel 마스크 영역 ───────────────────────────────")
-    pa_mask, sa_mask = report("A (baseline)", gt, a, mask)
-    pb_mask, sb_mask = report("B (fresnel) ", gt, b, mask)
+    print("\n── Fresnel 마스크 영역 (고F(p)) ──────────────────────")
+    pa_mask, sa_mask = report("A (baseline)  ", gt, a, mask)
+    pb_mask, sb_mask = report("B (fresnel)   ", gt, b, mask)
+    if c is not None:
+        pc_mask, sc_mask = report(f"{c_label:<16}", gt, c, mask)
     delta_p_mask = pb_mask - pa_mask
     delta_s_mask = sb_mask - sa_mask
-    print(f"  {'Δ (B−A)':30}  ΔPSNR={delta_p_mask:+.2f} dB   ΔSSIM={delta_s_mask:+.4f}")
+    print(f"  {'Δ B−A':30}  ΔPSNR={delta_p_mask:+.2f} dB   ΔSSIM={delta_s_mask:+.4f}")
+    if c is not None:
+        print(f"  {'Δ C−A':30}  ΔPSNR={pc_mask - pa_mask:+.2f} dB   ΔSSIM={sc_mask - sa_mask:+.4f}")
+
+    print("\n── 비-Fresnel 영역 (저F(p)) — regression 검증 ───────")
+    pa_non, sa_non = report("A (baseline)  ", gt, a, non_mask)
+    pb_non, sb_non = report("B (fresnel)   ", gt, b, non_mask)
+    if c is not None:
+        pc_non, sc_non = report(f"{c_label:<16}", gt, c, non_mask)
+    delta_p_non = pb_non - pa_non
+    print(f"  {'Δ B−A':30}  ΔPSNR={delta_p_non:+.2f} dB   ΔSSIM={pb_non - pa_non:+.4f}")
+    if c is not None:
+        print(f"  {'Δ C−A':30}  ΔPSNR={pc_non - pa_non:+.2f} dB   ΔSSIM={sc_non - sa_non:+.4f}")
 
     print("\n── 차이 이미지 저장 ──────────────────────────────────")
     out_dir = Path(args.gt).parent
-    diff_a_path = str(out_dir / "diff_baseline.png")
-    diff_b_path = str(out_dir / "diff_fresnel.png")
-    save_diff(gt, a, diff_a_path, args.diff_scale)
-    save_diff(gt, b, diff_b_path, args.diff_scale)
-    print(f"  {diff_a_path}")
-    print(f"  {diff_b_path}")
+    for label, img in [("baseline", a), ("fresnel", b)] + ([("variance", c)] if c is not None else []):
+        path = str(out_dir / f"diff_{label}.png")
+        save_diff(gt, img, path, args.diff_scale)
+        print(f"  {path}")
 
     print("\n── 결론 ──────────────────────────────────────────────")
-    if delta_p_full > 0:
-        print(f"  ✅ Fresnel-guided가 전체 PSNR {delta_p_full:+.2f} dB 우수")
-    else:
-        print(f"  ❌ Fresnel-guided 전체 PSNR {delta_p_full:+.2f} dB (baseline 우세)")
-    if delta_p_mask > 0:
-        print(f"  ✅ Fresnel 마스크 영역 PSNR {delta_p_mask:+.2f} dB 우수")
-    else:
-        print(f"  ❌ Fresnel 마스크 영역 PSNR {delta_p_mask:+.2f} dB (baseline 우세)")
+    print(f"  전체   B−A: ΔPSNR {delta_p_full:+.2f} dB  "
+          f"{'✅' if delta_p_full > 0 else '❌'}")
+    print(f"  고F(p) B−A: ΔPSNR {delta_p_mask:+.2f} dB  "
+          f"{'✅' if delta_p_mask > 0 else '❌'}")
+    print(f"  저F(p) B−A: ΔPSNR {delta_p_non:+.2f} dB  "
+          f"{'✅ (regression 없음)' if delta_p_non >= -0.05 else '⚠️ regression 확인 필요'}")
     print()
 
 

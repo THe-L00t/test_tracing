@@ -389,9 +389,35 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
     // 디노이저 초기화
     m_denoiser.Init(m_core.Device(), width, height);
 
+    // GPU 타임스탬프 쿼리 힙 + 리드백 버퍼 (T키 ms/frame 측정용)
+    {
+        D3D12_QUERY_HEAP_DESC qhDesc{};
+        qhDesc.Type  = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+        qhDesc.Count = 3;  // 0=Pass1 전, 1=Pass1 후, 2=Pass2 후
+        ThrowIfFailed(m_core.Device()->CreateQueryHeap(&qhDesc,
+            IID_PPV_ARGS(&m_timestampHeap)));
+
+        D3D12_HEAP_PROPERTIES rbHeap{ D3D12_HEAP_TYPE_READBACK };
+        D3D12_RESOURCE_DESC   bufDesc{};
+        bufDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufDesc.Width            = 3 * sizeof(uint64_t);
+        bufDesc.Height           = 1;
+        bufDesc.DepthOrArraySize = 1;
+        bufDesc.MipLevels        = 1;
+        bufDesc.SampleDesc       = { 1, 0 };
+        bufDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ThrowIfFailed(m_core.Device()->CreateCommittedResource(
+            &rbHeap, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&m_timestampBuf)));
+
+        ThrowIfFailed(m_core.CmdQueue()->GetTimestampFrequency(&m_gpuTickFreq));
+    }
+    std::println("[App] GPU 타임스탬프 초기화 완료");
+
     m_sceneBuilt = true;
     std::println("[App] 초기화 완료 - 씬 0 (야외)");
-    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, D 디노이저 토글, ESC 종료");
+    std::println("[App] 조작: WASD 이동, IJKL 시점, 1~8 씬 전환, B Pass2 토글, N Variance 모드, T 타이밍, P 100spp / I 225spp / O GT 스크린샷, ESC 종료");
 }
 
 void App::Shutdown()
@@ -1208,9 +1234,10 @@ void App::UpdateSceneCB()
     std::memcpy(mapped, &cb, sizeof(SceneCB));
     m_sceneCB->Unmap(0, nullptr);
 
-    // Pass2 CBV: debugMode 비트8=1 (passIndex=1)
+    // Pass2 CBV: 비트8=passIndex(1), 비트9=pass2Mode(0=Fresnel,1=Variance)
     SceneCB cbPass2 = cb;
     cbPass2.debugMode |= (1u << 8u);
+    cbPass2.debugMode |= (m_pass2Mode << 9u);
     ThrowIfFailed(m_sceneCBPass2->Map(0, &readRange, &mapped));
     std::memcpy(mapped, &cbPass2, sizeof(SceneCB));
     m_sceneCBPass2->Unmap(0, nullptr);
@@ -1256,6 +1283,17 @@ void App::OnKeyDown(uint32_t key)
         m_fresnelThreshold = std::min(1.00f, m_fresnelThreshold + 0.05f);
         std::println("[App] fresnelThreshold → {:.2f}", m_fresnelThreshold);
     }
+    else if (key == 'N')  // pass2Mode 토글 (Fresnel ↔ Variance-guided)
+    {
+        m_pass2Mode = (m_pass2Mode + 1u) % 2u;
+        static constexpr const char* k_modes[] = { "Fresnel-guided", "Variance-guided" };
+        std::println("[App] Pass2 모드 → {} ({})", m_pass2Mode, k_modes[m_pass2Mode]);
+    }
+    else if (key == 'T')  // GPU ms/frame 타이밍 측정 (1프레임)
+    {
+        m_pendingTimeMeasure = true;
+        std::println("[App] GPU 타이밍 측정 예약 — 다음 프레임 결과 출력");
+    }
     else if (key == 'P')  // 저spp 비교용 (100프레임)
     {
         if (m_screenshotTargetFrame >= 0)
@@ -1267,6 +1305,19 @@ void App::OnKeyDown(uint32_t key)
         {
             m_screenshotTargetFrame = 100;
             std::println("[App] 스크린샷 예약: 100프레임 자동 저장 (현재 {}프레임)", m_frameCount);
+        }
+    }
+    else if (key == 'I')  // Fair-baseline용 (225프레임 — Fresnel-guided 100spp 동등 ray 수)
+    {
+        if (m_screenshotTargetFrame >= 0)
+        {
+            m_screenshotTargetFrame = -1;
+            std::println("[App] 스크린샷 예약 취소");
+        }
+        else
+        {
+            m_screenshotTargetFrame = 225;
+            std::println("[App] Fair-baseline 스크린샷 예약: 225프레임 저장 (현재 {}프레임)", m_frameCount);
         }
     }
     else if (key == 'O')  // Ground truth용 (10000프레임)
@@ -1374,17 +1425,26 @@ void App::OnRender()
     dispatchDesc.Height                    = m_height;
     dispatchDesc.Depth                     = 1;
 
+    if (m_pendingTimeMeasure)
+        cmd->EndQuery(m_timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+
     cmd->DispatchRays(&dispatchDesc);  // Pass 1
 
     // Pass1 쓰기 완료 보장 (g_fresnel, g_accumulation 등 Pass2가 읽는 리소스)
     m_renderTarget.UAVBarriers(cmd);
 
-    // Pass 2: Fresnel-guided extra samples (B키로 ON/OFF)
+    if (m_pendingTimeMeasure)
+        cmd->EndQuery(m_timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
+
+    // Pass 2: Fresnel/Variance-guided extra samples (B키로 ON/OFF, N키로 모드 전환)
     if (m_pass2Enabled)
     {
         cmd->SetComputeRootConstantBufferView(1, m_sceneCBPass2->GetGPUVirtualAddress());
         cmd->DispatchRays(&dispatchDesc);
         m_renderTarget.UAVBarriers(cmd);
+
+        if (m_pendingTimeMeasure)
+            cmd->EndQuery(m_timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 2);
     }
 
     // 디노이저가 활성화된 경우: g_accumulation → (A-trous 3패스) → g_output 덮어쓰기
@@ -1417,25 +1477,66 @@ void App::OnRender()
         m_renderTarget.TransitionTo(cmd, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 
+    // 타임스탬프 ResolveQueryData: EndFrame 전에 커맨드 리스트에 기록
+    if (m_pendingTimeMeasure)
+    {
+        const uint32_t resolveCount = m_pass2Enabled ? 3u : 2u;
+        cmd->ResolveQueryData(m_timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                              0, resolveCount, m_timestampBuf.Get(), 0);
+    }
+
     m_core.EndFrame(m_smoothFps, m_denoiseEnabled);
 
-    // 스크린샷: GPU 완료 대기 후 BMP 저장
-    if (m_saveScreenshot)
-    {
+    // GPU 완료 대기 (스크린샷 또는 타이밍 측정 시)
+    if (m_saveScreenshot || m_pendingTimeMeasure)
         m_core.FlushGPU();
 
+    // 스크린샷 저장
+    if (m_saveScreenshot)
+    {
         uint8_t* pixels   = nullptr;
         const UINT64 sz   = (UINT64)m_screenshotFootprint.Footprint.RowPitch * m_height;
         D3D12_RANGE  rng  = { 0, (SIZE_T)sz };
         ThrowIfFailed(m_screenshotBuf->Map(0, &rng, reinterpret_cast<void**>(&pixels)));
 
+        const char* modeStr = m_pass2Enabled
+            ? (m_pass2Mode == 0 ? "fresnel" : "variance")
+            : "baseline";
         const std::string filename = std::format("screenshot_{}_{:05d}spp.bmp",
-            m_pass2Enabled ? "fresnel" : "baseline", m_frameCount);
+            modeStr, m_frameCount);
         SaveBMP(filename, pixels, m_width, m_height, m_screenshotFootprint.Footprint.RowPitch);
 
         m_screenshotBuf->Unmap(0, nullptr);
         std::println("[App] 스크린샷 저장 완료: {}", filename);
         m_saveScreenshot = false;
+    }
+
+    // GPU 타이밍 리드백 및 출력
+    if (m_pendingTimeMeasure)
+    {
+        uint64_t ticks[3]{};
+        D3D12_RANGE rng{ 0, sizeof(ticks) };
+        uint64_t* ptr = nullptr;
+        ThrowIfFailed(m_timestampBuf->Map(0, &rng, reinterpret_cast<void**>(&ptr)));
+        std::memcpy(ticks, ptr, sizeof(ticks));
+        m_timestampBuf->Unmap(0, nullptr);
+
+        auto toMs = [&](uint64_t delta) -> double
+        {
+            return static_cast<double>(delta) * 1000.0 / static_cast<double>(m_gpuTickFreq);
+        };
+
+        std::println("[GPU Timing]");
+        std::println("  Pass1 (1spp uniform):    {:.3f} ms", toMs(ticks[1] - ticks[0]));
+        if (m_pass2Enabled && ticks[2] > ticks[1])
+        {
+            const char* modeStr = (m_pass2Mode == 0) ? "Fresnel" : "Variance";
+            std::println("  Pass2 ({}-guided):  {:.3f} ms", modeStr, toMs(ticks[2] - ticks[1]));
+            std::println("  Total dispatch:          {:.3f} ms  ({:.1f}x baseline)",
+                toMs(ticks[2] - ticks[0]),
+                toMs(ticks[2] - ticks[0]) / toMs(ticks[1] - ticks[0]));
+        }
+        m_pendingTimeMeasure = false;
     }
 }
 

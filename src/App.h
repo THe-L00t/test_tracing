@@ -89,6 +89,13 @@ private:
     uint32_t m_debugMode         = 0;
     float    m_fresnelThreshold  = 0.05f;  // [/] 키로 ±0.05 조정
     bool     m_pass2Enabled      = true;   // B키 토글 (false=Baseline, true=Fresnel-guided)
+    uint32_t m_pass2Mode         = 0;      // N키 토글 (0=Fresnel-guided, 1=Variance-guided)
+
+    // GPU 타이밍 (T키 — Pass1/Pass2 ms 측정)
+    ComPtr<ID3D12QueryHeap> m_timestampHeap;
+    ComPtr<ID3D12Resource>  m_timestampBuf;   // readback, 3×uint64
+    uint64_t                m_gpuTickFreq  = 0;
+    bool                    m_pendingTimeMeasure = false;
 
     // 마우스 캡처
     HWND     m_hwnd          = nullptr;
