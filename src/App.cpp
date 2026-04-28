@@ -1567,9 +1567,12 @@ void App::OnRender()
         D3D12_RANGE  rng  = { 0, (SIZE_T)sz };
         ThrowIfFailed(m_screenshotBuf->Map(0, &rng, reinterpret_cast<void**>(&pixels)));
 
-        const char* modeStr = m_pass2Enabled
-            ? (m_pass2Mode == 0 ? "fresnel" : "variance")
-            : "baseline";
+        static constexpr const char* k_debugSuffix[] = {
+            nullptr, "fmap", "varmap", "depthmap", "normalmap", "maskmap"
+        };
+        const char* modeStr = (m_debugMode != 0)
+            ? k_debugSuffix[m_debugMode]
+            : (m_pass2Enabled ? (m_pass2Mode == 0 ? "fresnel" : "variance") : "baseline");
         namespace fs = std::filesystem;
         const fs::path dir = fs::path("screenshots") / std::format("scene{}", m_sceneID + 1);
         fs::create_directories(dir);
