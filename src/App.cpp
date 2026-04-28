@@ -754,8 +754,9 @@ void App::SwitchScene(uint32_t id)
     {
         // 씬 7 (Grazing Mirror+Stripe): 매우 낮은 시점, 크롬 바닥, 줄무늬 벽
         // 골드+유리 구 → 미러 반사·Fresnel grazing angle 극대화
+        // z=-3.2는 룸 앞벽(z=-3) 바깥 → z=-2.5로 룸 안쪽으로 이동
         std::println("[App] 씬 6 (Grazing Mirror+Stripe) 전환");
-        m_camera.Init(0.0f, 0.2f, -3.2f, 0.0f, 0.08f);
+        m_camera.Init(0.0f, 0.2f, -2.5f, 0.0f, 0.08f);
 
         TLASInstance instances[3]{};
 
