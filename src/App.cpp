@@ -4,6 +4,7 @@
 #include <cmath>
 #include <fstream>
 #include <vector>
+#include <filesystem>
 
 // ---------------------------------------------------------------
 // BMP 저장 헬퍼 (BGR24, 외부 라이브러리 없음)
@@ -1503,8 +1504,11 @@ void App::OnRender()
         const char* modeStr = m_pass2Enabled
             ? (m_pass2Mode == 0 ? "fresnel" : "variance")
             : "baseline";
-        const std::string filename = std::format("screenshot_{}_{:05d}spp.bmp",
-            modeStr, m_frameCount);
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::path("screenshots") / std::format("scene{}", m_sceneID + 1);
+        fs::create_directories(dir);
+        const std::string filename = (dir / std::format("screenshot_{}_{:05d}spp.bmp",
+            modeStr, m_frameCount)).string();
         SaveBMP(filename, pixels, m_width, m_height, m_screenshotFootprint.Footprint.RowPitch);
 
         m_screenshotBuf->Unmap(0, nullptr);
