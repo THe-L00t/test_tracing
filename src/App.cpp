@@ -872,13 +872,7 @@ void App::ProcessInput(float dt)
     if (GetAsyncKeyState('Q') & 0x8000) { m_camera.MoveUp( move); moved = true; }
     if (GetAsyncKeyState('E') & 0x8000) { m_camera.MoveUp(-move); moved = true; }
 
-    // 피치 (I=올려다보기, K=내려다보기)
-    if (GetAsyncKeyState('I') & 0x8000) { m_camera.AddPitch(-rot); moved = true; }
-    if (GetAsyncKeyState('K') & 0x8000) { m_camera.AddPitch( rot); moved = true; }
-
-    // 요 (J=왼쪽, L=오른쪽)
-    if (GetAsyncKeyState('J') & 0x8000) { m_camera.AddYaw(-rot); moved = true; }
-    if (GetAsyncKeyState('L') & 0x8000) { m_camera.AddYaw( rot); moved = true; }
+    // 카메라 회전: 마우스 캡처(좌클릭) 후 마우스로 조작
 
     // 마우스 델타 처리 (캡처 중일 때 센터 락)
     if (m_mouseCaptured)
@@ -1307,19 +1301,6 @@ void App::OnKeyDown(uint32_t key)
         {
             m_screenshotTargetFrame = 100;
             std::println("[App] 스크린샷 예약: 100프레임 자동 저장 (현재 {}프레임)", m_frameCount);
-        }
-    }
-    else if (key == 'I')  // Fair-baseline용 (225프레임 — Fresnel-guided 100spp 동등 ray 수)
-    {
-        if (m_screenshotTargetFrame >= 0)
-        {
-            m_screenshotTargetFrame = -1;
-            std::println("[App] 스크린샷 예약 취소");
-        }
-        else
-        {
-            m_screenshotTargetFrame = 225;
-            std::println("[App] Fair-baseline 스크린샷 예약: 225프레임 저장 (현재 {}프레임)", m_frameCount);
         }
     }
     else if (key == 'O')  // Ground truth용 (10000프레임)
