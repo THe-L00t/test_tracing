@@ -92,11 +92,18 @@ private:
     bool     m_pass2Enabled      = true;   // B키 토글 (false=Baseline, true=Fresnel-guided)
     uint32_t m_pass2Mode         = 0;      // N키 토글 (0=Fresnel-guided, 1=Variance-guided)
 
-    // GPU 타이밍 (T키 — Pass1/Pass2 ms 측정)
+    // GPU 타이밍 (T키 — 단일 프레임 / Y키 — 10프레임 평균±σ)
     ComPtr<ID3D12QueryHeap> m_timestampHeap;
     ComPtr<ID3D12Resource>  m_timestampBuf;   // readback, 3×uint64
     uint64_t                m_gpuTickFreq  = 0;
     bool                    m_pendingTimeMeasure = false;
+
+    static constexpr uint32_t k_multiTimeN = 10u;
+    bool     m_multiTimeMeasure = false;
+    uint32_t m_multiTimeIdx     = 0;
+    double   m_mtPass1[k_multiTimeN]{};
+    double   m_mtPass2[k_multiTimeN]{};
+    double   m_mtTotal[k_multiTimeN]{};
 
     // 마우스 캡처
     HWND     m_hwnd          = nullptr;

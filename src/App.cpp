@@ -1290,6 +1290,12 @@ void App::OnKeyDown(uint32_t key)
         m_pendingTimeMeasure = true;
         std::println("[App] GPU 타이밍 측정 예약 — 다음 프레임 결과 출력");
     }
+    else if (key == 'Y')  // GPU ms/frame 10프레임 평균±σ 측정
+    {
+        m_multiTimeMeasure = true;
+        m_multiTimeIdx     = 0;
+        std::println("[App] GPU {}프레임 평균 측정 시작...", k_multiTimeN);
+    }
     else if (key == 'P')  // 저spp 비교용 (100프레임)
     {
         if (m_screenshotTargetFrame >= 0)
@@ -1456,6 +1462,10 @@ void App::OnRender()
         }
     }
 
+    // Y키 다중 측정: 이 프레임에 타임스탬프 자동 예약
+    if (m_multiTimeMeasure)
+        m_pendingTimeMeasure = true;
+
     UpdateSceneCB();
 
     m_core.BeginFrame();
@@ -1595,21 +1605,73 @@ void App::OnRender()
         std::memcpy(ticks, ptr, sizeof(ticks));
         m_timestampBuf->Unmap(0, nullptr);
 
-        auto toMs = [&](uint64_t delta) -> double
-        {
+        auto toMs = [&](uint64_t delta) -> double {
             return static_cast<double>(delta) * 1000.0 / static_cast<double>(m_gpuTickFreq);
         };
 
-        std::println("[GPU Timing]");
-        std::println("  Pass1 (1spp uniform):    {:.3f} ms", toMs(ticks[1] - ticks[0]));
-        if (m_pass2Enabled && ticks[2] > ticks[1])
+        const double pass1Ms = toMs(ticks[1] - ticks[0]);
+        const bool   hasPass2 = m_pass2Enabled && ticks[2] > ticks[1];
+        const double pass2Ms  = hasPass2 ? toMs(ticks[2] - ticks[1]) : 0.0;
+        const double totalMs  = hasPass2 ? toMs(ticks[2] - ticks[0]) : pass1Ms;
+
+        if (!m_multiTimeMeasure)
         {
-            const char* modeStr = (m_pass2Mode == 0) ? "Fresnel" : "Variance";
-            std::println("  Pass2 ({}-guided):  {:.3f} ms", modeStr, toMs(ticks[2] - ticks[1]));
-            std::println("  Total dispatch:          {:.3f} ms  ({:.1f}x baseline)",
-                toMs(ticks[2] - ticks[0]),
-                toMs(ticks[2] - ticks[0]) / toMs(ticks[1] - ticks[0]));
+            // T키 단일 측정 출력
+            std::println("[GPU Timing]");
+            std::println("  Pass1 (1spp uniform):    {:.3f} ms", pass1Ms);
+            if (hasPass2)
+            {
+                const char* modeStr = (m_pass2Mode == 0) ? "Fresnel" : "Variance";
+                std::println("  Pass2 ({}-guided):  {:.3f} ms", modeStr, pass2Ms);
+                std::println("  Total dispatch:          {:.3f} ms  ({:.1f}x baseline)",
+                    totalMs, totalMs / pass1Ms);
+            }
         }
+        else
+        {
+            // Y키 다중 측정 수집
+            m_mtPass1[m_multiTimeIdx] = pass1Ms;
+            m_mtPass2[m_multiTimeIdx] = pass2Ms;
+            m_mtTotal[m_multiTimeIdx] = totalMs;
+            ++m_multiTimeIdx;
+
+            std::println("[GPU Timing] 수집 중... {}/{}", m_multiTimeIdx, k_multiTimeN);
+
+            if (m_multiTimeIdx >= k_multiTimeN)
+            {
+                m_multiTimeMeasure = false;
+
+                auto stats = [&](const double* arr) -> std::pair<double, double>
+                {
+                    double sum = 0.0;
+                    for (uint32_t i = 0; i < k_multiTimeN; ++i) sum += arr[i];
+                    const double mean = sum / k_multiTimeN;
+                    double var = 0.0;
+                    for (uint32_t i = 0; i < k_multiTimeN; ++i)
+                        var += (arr[i] - mean) * (arr[i] - mean);
+                    return { mean, std::sqrt(var / k_multiTimeN) };
+                };
+
+                auto [p1mean, p1std]   = stats(m_mtPass1);
+                auto [p2mean, p2std]   = stats(m_mtPass2);
+                auto [totmean, totstd] = stats(m_mtTotal);
+
+                const char* modeStr = m_pass2Enabled
+                    ? (m_pass2Mode == 0 ? "Fresnel" : "Variance")
+                    : "Baseline";
+
+                std::println("[GPU Timing — {}프레임 평균]", k_multiTimeN);
+                std::println("  모드  : {}", modeStr);
+                std::println("  Pass1 : {:.3f} ± {:.3f} ms", p1mean, p1std);
+                if (hasPass2)
+                {
+                    std::println("  Pass2 : {:.3f} ± {:.3f} ms", p2mean, p2std);
+                    std::println("  Total : {:.3f} ± {:.3f} ms  ({:.2f}x Pass1)",
+                        totmean, totstd, totmean / p1mean);
+                }
+            }
+        }
+
         m_pendingTimeMeasure = false;
     }
 }
