@@ -1303,6 +1303,19 @@ void App::OnKeyDown(uint32_t key)
             std::println("[App] 스크린샷 예약: 100프레임 자동 저장 (현재 {}프레임)", m_frameCount);
         }
     }
+    else if (key == 'I')  // Fair-baseline용 (225프레임 — Fresnel-guided 100spp 동등 ray 수)
+    {
+        if (m_screenshotTargetFrame >= 0)
+        {
+            m_screenshotTargetFrame = -1;
+            std::println("[App] 스크린샷 예약 취소");
+        }
+        else
+        {
+            m_screenshotTargetFrame = 225;
+            std::println("[App] Fair-baseline 스크린샷 예약: 225프레임 저장 (현재 {}프레임)", m_frameCount);
+        }
+    }
     else if (key == 'O')  // Ground truth용 (10000프레임)
     {
         if (m_screenshotTargetFrame >= 0)
