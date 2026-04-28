@@ -87,7 +87,7 @@ private:
     // 연구용 디버그 모드 (V키 순환)
     // 0=PT, 1=Fresnel, 2=Var, 3=DepthEdge, 4=NormalEdge, 5=ThresholdMask
     uint32_t m_debugMode         = 0;
-    float    m_fresnelThreshold  = 0.05f;  // [/] 키로 ±0.05 조정
+    float    m_fresnelThreshold  = 0.15f;  // [/] 키로 ±0.05 조정
     bool     m_pass2Enabled      = true;   // B키 토글 (false=Baseline, true=Fresnel-guided)
     uint32_t m_pass2Mode         = 0;      // N키 토글 (0=Fresnel-guided, 1=Variance-guided)
 
