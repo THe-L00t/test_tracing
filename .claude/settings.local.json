@@ -14,7 +14,18 @@
       "Bash(python compare.py --gt screenshot_fresnel_10000spp.bmp --a screenshot_baseline_00440spp.bmp --b screenshot_fresnel_00444spp.bmp)",
       "Bash(python -c ' *)",
       "mcp__claude_ai_Notion__notion-update-page",
-      "Bash(git commit -m 'fix: 체커 원형 띠 제거 — 3D 등값면 → 법선 기반 2D 투영 *)"
+      "Bash(git commit -m 'fix: 체커 원형 띠 제거 — 3D 등값면 → 법선 기반 2D 투영 *)",
+      "Bash(git commit -m 'fix: 씬 7 카메라 초기 위치 수정 — z=-3.2\\(룸 밖\\) → z=-2.5\\(룸 안\\) *)",
+      "Bash(python compare.py --gt screenshots/scene4/screenshot_baseline_10000spp.bmp --a screenshots/scene4/screenshot_baseline_00100spp.bmp --b screenshots/scene4/screenshot_fresnel_00100spp.bmp --c screenshots/scene4/screenshot_variance_00100spp.bmp --c-label 'C \\(variance\\)')",
+      "Bash(python compare.py --gt screenshots/scene5/screenshot_baseline_10000spp.bmp --a screenshots/scene5/screenshot_baseline_00100spp.bmp --b screenshots/scene5/screenshot_fresnel_00100spp.bmp --c screenshots/scene5/screenshot_variance_00100spp.bmp --c-label 'C \\(variance\\)')",
+      "Bash(python compare.py --gt screenshots/scene6/screenshot_baseline_10000spp.bmp --a screenshots/scene6/screenshot_baseline_00100spp.bmp --b screenshots/scene6/screenshot_fresnel_00100spp.bmp --c screenshots/scene6/screenshot_variance_00100spp.bmp --c-label 'C \\(variance\\)')",
+      "Bash(python compare.py --gt screenshots/scene7/screenshot_baseline_10000spp.bmp --a screenshots/scene7/screenshot_baseline_00100spp.bmp --b screenshots/scene7/screenshot_fresnel_00100spp.bmp --c screenshots/scene7/screenshot_variance_00100spp.bmp --c-label 'C \\(variance\\)')",
+      "Bash(python compare.py --gt screenshots/scene8/screenshot_baseline_10000spp.bmp --a screenshots/scene8/screenshot_baseline_00100spp.bmp --b screenshots/scene8/screenshot_fresnel_00100spp.bmp --c screenshots/scene8/screenshot_variance_00100spp.bmp --c-label 'C \\(variance\\)')",
+      "Bash(python *)",
+      "Bash(pip install *)",
+      "Bash(hwp5txt \"2026 한국게임학회_춘계_논문양식.hwp\")",
+      "Bash(pip show *)",
+      "WebSearch"
     ]
   }
 }
