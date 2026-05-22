@@ -25,7 +25,17 @@
       "Bash(pip install *)",
       "Bash(hwp5txt \"2026 한국게임학회_춘계_논문양식.hwp\")",
       "Bash(pip show *)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2, ensure_ascii=False\\)\\)\")",
+      "Bash(env)",
+      "mcp__plugin_Notion_notion__notion-create-pages",
+      "mcp__plugin_Notion_notion__notion-search",
+      "mcp__plugin_Notion_notion__notion-fetch",
+      "mcp__plugin_Notion_notion__notion-update-page",
+      "Bash(git commit *)",
+      "Bash(dir \"C:\\\\Users\\\\sigun\\\\University\\\\프로젝트\\\\test_tracing\\\\screenshots\\\\scene5\" /b)",
+      "Bash(dir \"C:\\\\Users\\\\sigun\\\\University\\\\프로젝트\\\\test_tracing\\\\screenshots\" /b)",
+      "Bash(findstr /i \"wPSNR\\\\|dB\\\\|scene\\\\|Scene\")"
     ]
   }
 }

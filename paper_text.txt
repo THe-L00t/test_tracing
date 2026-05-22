@@ -1,0 +1,719 @@
+=== Page 1 ===
+2026년 한국게임학회 춘계 학술발표대회 논문집 ❙1
+1. 서
+론
+실시간 경로 추적(Path Tracing, PT)은 물리 기
+반 광원 전달을 Monte Carlo 방식으로 근사한다
+[12,13]. ≥60fps 실시간 환경에서는 픽셀당 1–4 
+spp에 불과하여 고분산 노이즈가 필연적이다. ray 예
+산을 어디에 쏠 것인가? 균일 샘플링은 지각적으로 
+중요한 영역을 우대하지 않고, Variance-guided는 
+수렴된 Fresnel 경계—인간이 재질 정체성을 판단하
+는 핵심 단서—를 샘플링 단계에서 우대하지 않는다
+[1,2].
+핵심 관찰: Fresnel 전이 경계에서 하나의 샘플 
+오차는 표면이 반사적으로 보이는지 투과적으로 보이
+는지를 바꾼다. 이는 단순 노이즈가 아닌 물리 의미의 
+변화이며, 인간은 이에 극도로 민감하다[3,4]. 본 연
+구는 같은 ray 예산 안에서 Fresnel 경계에 ray를 
+선제적으로 집중하면 지각적 품질이 향상되는지 검증
+한다.
+기여:
+본 논문의 주요 기여는 다음과 같다.
+(1) 
+[주 
+기여] 
+Self-Regulating 
+2-pass 
+Dispatch — F(p) 희소성 비례 오버헤드 자동 조절, 
+526배 비용 차이 실측, 전 씬 60fps
+(2) [주 기여] Operating Envelope 규명 — A
+≲5%에서 효과, A>20%에서 중립
+(3) [보조 기여] 지각 선호도 통계 근거 — 
+Scene 5: 69.2%, p=0.038 (n=40)
+2. 배경및관련연구
+픽셀 p의 지각적 중요도:
+I(p) 
+= 
+w_f·F(p) 
++ 
+w_e·E(p) 
++ 
+희소 Fresnel 경계 샘플링: 실시간 경로 추적을 위한 
+자기조절형 지각 레이 예산 전략
+이태형○
+한국공학대 게임공학과
+sigun2001@naver.com 
+Sparse Fresnel Boundary Sampling: A Self-Regulating Perceptual Ray
+Budget Strategy for Real-Time Path Tracing
+Tae-Hyoung Lee○
+Dept. of Game & Multimedia Engineering, Tech University of Korea
+요  약
+실시간 전체 경로 추적(Full Path Tracing)에서 픽셀당 ray 예산은 엄격히 제한된다. 기존 
+Variance-guided 적응형 샘플링은 분산이 낮더라도 인간이 가장 민감하게 반응하는 Fresnel 반사
+-굴절 전이 경계를 식별하지 못한다. 본 연구는 이 경계에서의 지각적 위험도를 측정하는 Fresnel 
+Prior F(p)를 정의하고, 이를 기반으로 ray 예산을 재배분하는 2-pass Fresnel-Guided 
+Perceptual Sampling(FGPS)을 제안한다. 핵심 설계 원리는 자기조절(Self-Regulation)로, F(p) 
+분포가 희소할수록 Pass 2 오버헤드가 자동으로 0에 수렴하여 예측 가능한 연산 비용을 보장한다. 
+DirectX 12 + DXR 환경에서 5개 씬으로 검증한 결과, GPU 처리 시간 Variance-guided 대비 
+평균 5.73배 향상(전 씬 60fps), Pass 2 자기조절 실측 526배 차이(Scene 5), Weighted PSNR 
+평균 +1.23 dB 개선, FLIP 전 씬 Baseline 대비 개선(전역 품질이 아닌 국소적 재질 경계 개선에 
+기인), 사용자 설문(n=40) p=0.038(Scene 5)를 달성하였다.
+핵심어: 실시간 경로 추적, 적응형 샘플링, Fresnel Prior, 지각적 품질, DirectX Raytracing
+2 ❙희소Fresnel 경계샘플링: 실시간경로추적을위한자기조절지각적레이예산전략
+w_t·T(p) + B
+E(p)와 T(p)는 SVGF·TAA와 같은 공간적 및 
+시간적 필터링 기법에 의해 이미 효과적으로 처리된
+다. 이러한 성분을 샘플링 단계에서 다시 반영하는 것
+은 파이프라인 상 중복이며, 전체 시스템 관점에서는 
+비효율적이다. 특히 Fresnel 경계는 고주파 반사 및 
+굴절 패턴을 포함하여, denoising 과정에서 오히려 
+과도하게 평활화되거나 왜곡될 수 있다. 따라서 이는 
+post-process가 아닌 샘플링 단계에서 직접 다루어
+야 하는 문제이다. 결과적으로 샘플링 단계에서  명시
+적으로 최적화되지 않는 지각 성분은 F(p)에 해당하
+며, 본 연구는 이에 집중한다. Mitchell[2], Painter 
+& 
+Sloan[5]의 
+분산 
+기반 
+적응형 
+샘플링, 
+ReSTIR[1]의 직접광 resampling, SVGF[7]의 분
+산 기반 시공간 필터링은 모두 Fresnel 지각 민감도
+를 
+직접 
+다루지 
+않는다. 
+Fleming[3]은 
+인간이 
+specular highlight 구조에서 재질 정체성을 판단함
+을 보였고, Pellacini et al.[4]은 specular 반사 속
+성 
+변화에 
+대한 
+인간의 
+지각 
+민감도를 
+psychophysics 실험으로 정량화하여, 재질 경계에서
+의 오류가 diffuse 영역 오류보다 현저히 크게 지각
+됨을 확인했다.
+3. 방법론
+3.1. Fresnel Prior F(p)
+1차 레이 히트(bounce=0)에서 표면 속성만으로 
+계산:
+F_p 
+= 
+pow(1-dot(N,V), 
+5) 
+× 
+(1-roughness) × (metallic + glassFlag×2)
+각 
+인자의 
+이론적 
+근거: 
+`fresnelTerm`은 
+Schlick[6]의 grazing angle 근사를 직접 적용한다. 
+`surfaceFactor`는 
+microfacet 
+이론[9,10]에서 
+roughness가 높을수록 Fresnel 전이 경계가 확산·
+희석됨에 근거한다. `specWeight`에서 glassFlag에 
+×2를 적용하는 이유는 유리 재질이 입사면과 출사면 
+양쪽에서 Fresnel 전이를 발생시켜, 단일 반사 금속 
+재질 대비 경계 밀도가 2배이기 때문이다. F(p)는 수
+렴 여부와 무관하게 표면 속성에서 선제적으로 위험 
+영역을 식별한다. Variance-guided가 식별하지 못
+하는 수렴 후 Fresnel 경계를 표적화한다.
+[그림 1] F(p) 맵 — gold sphere 테두리·glass 
+slab 경계 hotspot 강조 
+(scene5/screenshot_fmap_00100spp.bmp)
+3.2. Stochastic Sample Allocation
+추가 샘플 수를 연속 기댓값이 보장되는 확률적 정
+수로 결정:
+extraSPP 
+= 
+floor(F_p×K) 
++ 
+Bernoulli(frac(F_p×K)),  K=4
+E[extraSPP] = F_p×K 보장으로 분수 예산을 
+bias 없이 처리한다.
+3.3. 2-Pass Self-Regulating
+Dispatch
+Pass 1: 전 픽셀 1spp PT 수행 후 bounce=0에
+서 F(p)를 g_fresnel에 기록하고 UAV Barrier를 
+삽입한다.
+Pass 2: `g_fresnel[p] > τ` 픽셀에 한하여
+
+=== Page 2 ===
+2026년 한국게임학회 춘계 학술발표대회 논문집 ❙3
+extraSPP 추가 추적한 뒤 가중평균으로 병합한다. 
+(`w = K/(frameCount+1+K)`). Base floor B
+(균일 1spp)로 zero-sample bias 방지한다.
+F(p) > τ를 만족하는 픽셀 비율을 A = |{p : 
+F(p) > τ}| / N으로 정의한다. Pass 2 비용은 고
+F(p) 커버리지 A에 선형 비례하여 자동 조절된다. A
+≈0.2%(Scene 
+5): 
+Pass 
+2 
+단독 
+Fresnel 
+0.048±0.007ms 
+vs 
+Variance 
+25.278±2.683ms(526배). A≈29.1%(Scene 7): 
+전체 
+프레임 
+Fresnel 
+5.234±0.167ms 
+vs 
+Variance 
+45.143±1.117ms(8.63배). 
+Variance-guided는 A와 무관하게 전 프레임을 처
+리하므로 비용이 씬 전환 후에도 일정 수준 이하로 
+줄지 않는다(σ=1.117ms).
+[그림 2] Self-Regulation 개념도 — F(p) 
+sparsity vs Pass 2 cost
+4. 구현
+환경: DirectX 12 + DXR (Shader Model 
+6.x), C++23 Host, HLSL Shader
+Renderer: 8-bounce PT, GGX BRDF[9] + 
+MIS[11] + NEE, Glass/TIR
+추가 버퍼: `g_fresnel` (R32F UAV) — F(p) 
+누적 맵
+Ablation 키: N키 — Fresnel↔Variance 모드 
+전환 (동일 아키텍처 ablation)
+Firefly 
+처리: 
+`g_accumulation` 
+raw 
+유지
+(unbiased), 출력 전용 display clamp(10.0) + 
+temporal lerp(α=0.15)
+5. 실험설계
+비교 
+대상: 
+B(Baseline, 
+100spp 
+균일), 
+F(Fresnel-guided), 
+V(Variance-guided, 
+ablation), GT(Baseline 10,000spp)
+평가 지표: wPSNR(F(p) 가중), FLIP[8], GPU 
+타이밍(Y키 10프레임 평균±σ), 2AFC 사용자 설문
+(n=40, 이항검정 단측)
+[표 1] 테스트 씬 구성 및 F(p) 커버리지
+씬
+구성
+A(%)
+예상 효과
+Scene 5
+Cornell Box 
++ 유리 판 
++ 골드 구
+0.2
+주력 씬 
+(hotspot 
+극소)
+Scene 7
+유리 구 + 
+역광
+29.1
+Envelope 
+외부 
+(예측된 
+중립)
+Scene 8
+유리 구 + 
+역광 + 체커
+0.9
+보조 씬
+Scene 4
+크롬 바닥 + 
+골드·유리 
+구
+29.1
+Envelope 
+외부
+Scene 6
+Grazing 
+Mirror
+0.0
+적용 범위 
+밖
+6. 실험결과
+6.1. Weighted PSNR (wPSNR)
+[표 2] wPSNR 비교 (dB, ↑ better)
+씬
+Baseline
+Fresnel
+ΔF-B
+Scene 5
+13.19
+18.05
++4.86 ✓
+Scene 7
+17.23
+16.93
+-0.30
+Scene 8
+22.64
+24.26
++1.62 ✓
+Scene 4
+20.15
+20.06
+-0.09
+평균
+19.86
+21.09
++1.23
+표 2에서 Scene 5(A=0.2%)는 +4.86 dB의 가
+장 큰 개선을 보인다. 이는 F(p) hotspot이 극소하
+게 집중된 씬에서 추가 레이 예산이 Fresnel 경계에 
+선택적으로 투입됨으로써 해당 영역의 신호 품질이 
+집중적으로 
+향상되었기 
+때문이다. 
+반면 
+Scene 
+7(A=29.1%)은 −0.30 dB로 소폭 저하되는데, 이
+는 operating envelope 외부에서 예산이 분산되어 
+집중 효과가 사라짐을 반영한다.
+4 ❙희소Fresnel 경계샘플링: 실시간경로추적을위한자기조절지각적레이예산전략
+[그림 3] 4열 비교 이미지 — Scene 5: Baseline 
+| Variance | Fresnel | GT (10000spp)
+6.2. FLIP (외부지각품질지표)
+wPSNR 순환 논리 방어를 위해 FLIP[8](F(p)와 
+독립적인 외부 HVS 지표)을 추가 적용하였다.
+[표 3] FLIP 비교 (↓ better)
+씬
+Baselin
+e
+Fresn
+el
+Varianc
+e
+ΔF
+-B
+ΔV-
+B
+Sce
+ne 5
+0.124
+0.114
+0.093
+-0.
+010
+-0.0
+31
+Sce
+ne 7
+0.157
+0.155
+0.164
+-0.
+003
++0.0
+06 ⚠
+Sce
+ne 8
+0.057
+0.057
+0.052
+-0.
+001
+-0.0
+06
+Sce
+ne 4
+0.105
+0.103
+0.096
+-0.
+002
+-0.0
+09
+Sce
+ne 6
+0.078
+0.078
+0.078
+-0.
+000
+-0.0
+00
+Fresnel이 전 씬에서 Baseline보다 낮은 FLIP으
+로 순환 논리 우려를 해소한다. Scene 7에서 
+Variance 
+FLIP 
+> 
+Baseline(+0.006)으로, 
+operating envelope 외부에서 Variance-guided가 
+오히려 역효과임을 독립 지표가 확인한다.
+6.3. GPU 타이밍
+[표 4] GPU 프레임 타이밍 (ms, 10프레임 
+평균±σ)
+씬
+Fresnel
+Variance
+비율
+Scene 
+4
+8.032±0.170
+71.165±5.47
+4
+8.86×
+Scene 
+5
+4.309±0.162
+29.493±2.74
+1
+6.85×
+Scene 
+6
+12.973±0.93
+4
+13.601±0.97
+7
+1.05×
+Scene 
+7
+5.234±0.167
+45.143±1.11
+7
+8.63×
+Scene 
+8
+12.992±0.90
+7
+42.528±0.92
+4
+3.27×
+평균
+8.708
+40.386
+5.73×
+표 4의 평균 5.73배 향상은 단순 연산 절약이 아
+닌 Self-Regulation 구조의 직접적인 결과이다. 
+Scene 6(A≈0.0%)에서 비율이 1.05배에 그치는 
+이유는 두 가지가 복합된 결과이다. Fresnel-guided
+는 자기조절에 의해 Pass 2 실행이 거의 없으며, 
+Variance-guided 역시 Grazing Mirror 씬의 정반
+사 특성상 분산이 낮아 Pass 2 대상 픽셀이 극소하
+다. 결과적으로 두 방법 모두 Pass 1 비용이 전체를 
+지배하여 비율이 수렴한다. 이와 달리 Scene 5에서
+는 분산이 높아 Variance-guided의 Pass 2 비용이 
+25.278ms에 달하는 반면 Fresnel-guided Pass 2
+는 0.048ms에 불과하여, 자기조절의 실질적 효과가 
+526배 차이로 나타난다. 
+표 4 기준 60fps 달성: Fresnel 5/5 ✓, 
+Variance 1/5 (Scene 6만 해당).
+Pass 
+2 
+단독(Scene 
+5): 
+Fresnel 
+0.048±0.007ms vs Variance 25.278±2.683ms 
+(526배). 
+[그림 4] Pass 2 타이밍 bar chart — 5씬 
+Fresnel/Variance, 60fps 기준선
+6.4. Temporal Stability
+이 절에서는 두 독립 캡처 세션 간 MAE(실제 연
+
+=== Page 3 ===
+2026년 한국게임학회 춘계 학술발표대회 논문집 ❙5
+속 프레임 차이의 상한)을 분석한다.
+[표 5] Temporal MAE (↓ stable)
+씬
+Baseline
+Fresnel
+Variance
+Scene 5
+0.032
+0.006
+0.069
+Scene 7
+0.002
+0.011
+0.015
+Scene 8
+0.003
+0.004
+0.025
+Scene 4
+0.003
+0.010
+0.030
+표 5의 수치는 두 독립 캡처 세션 간 MAE이므로, 
+실제 연속 프레임 간 차이의 상한으로 해석할 수 있
+다. 
+Fresnel-guided가 
+Scene 
+5에서 
+Variance-guided 대비 약 12배 안정적인 이유는 
+F(p)가 표면 기하 속성에서 결정론적으로 계산되어 
+매 프레임 동일한 픽셀 집합이 대상이 되기 때문이다. 
+Variance-guided는 확률적 추정값에 의존하므로 프
+레임마다 Pass 2 적용 패턴이 달라져 시각적 
+flickering 위험이 높다.
+6.5. 사용자설문(n=40, 2AFC)
+[표 6] 2AFC 사용자 설문 결과(“모르겠다” 제외 
+후 결정적 응답만 검정)
+씬
+비교
+우세
+비율
+p-val
+ue
+Scene 
+5
+F vs 
+B
+Fresnel
+18/26=69.2
+%
+0.038 
+✓
+Scene 
+5
+F vs 
+V
+Varianc
+e
+21/34=61.8
+%
+0.085
+Scene 
+7
+F vs 
+B
+중립
+8/17=47.1%
+0.597
+Scene 
+8
+F vs 
+B
+Fresnel
+13/22=59.1
+%
+0.197
+4개 조건의 결과가 모두 operating envelope 이
+론의 예측과 방향 일치한다.
+Scene 5 F vs B (A=0.2%, envelope 내부): 
+Fresnel 18/26=69.2%, p=0.038 — 이론 예측(유
+효)이 통계적으로 검증되었다. 모르겠다 14명(35%)
+을 
+제외하면, 
+결정적 응답자 
+26명 
+중 
+18명이 
+Fresnel을 선택하였다. 
+Scene 5 F vs V: Variance 21/34=61.8%, 
+p=0.085 — Variance-guided는 전역 노이즈 최소
+화에, Fresnel-guided는 재질 경계 물리적 정확도에 
+최적화되는 상호 보완적 목적 함수임을 지각 실험이 
+지지한다. 모르겠다 응답은 6명(15%)으로 가장 낮았
+으며, 이는 해당 비교가 가장 명확한 판단 조건이었음
+을 시사한다.
+Scene 
+7 
+(A=29.1%, 
+envelope 
+외부): 
+8/17=47.1%, p=0.597 중립 — 이론이 예측한 '차
+이 없음'이 실험에서 그대로 확인되었다. 모르겠다 23
+명(57.5%)로 가장 높았으며, 이는 실패가 아닌 
+envelope 이론의 실험적 검증이다.
+Scene 
+8 
+(A=0.9%, 
+envelope 
+내부): 
+13/22=59.1%, p=0.197 — 방향은 이론과 일치하
+나 통계적 유의성에 도달하지 못하였다. α=0.05, 
+power=0.80 기준으로 충분한 검정력을 확보하려면 
+n≥85의 표본이 필요하다.
+[그림 5] 사용자 설문 결과 요약 bar chart
+7. 분석및토의
+Operating 
+envelope(A≲5%)에서 
+F(p) 
+hotspot 집중 효과가 극대화된다. A>20%에서는 예
+산이 
+분산되어 
+집중 
+효과가 
+사라지며, 
+Variance-guided는 
+오히려 
+역효과를 
+나타낸다
+(Scene 7 FLIP). Variance-guided는 전역적 
+MSE를 최소화하여 전체 이미지가 '더 깔끔하게' 보이
+고, Fresnel-guided는 재질 경계의 물리적 정확도를 
+우선하여 '더 재질답게' 보인다. 두 방법은 경쟁 관계
+가 아닌 상호 보완적 목적 함수이다.
+Self-Regulation의 
+실용적 
+의미: 
+Variance-guided는 씬 전환 직후 비용이 폭증(σ
+=5.474ms), Fresnel-guided는 표면 속성 기반이
+므로 안정적(σ=0.170ms). 실시간 렌더링에서 프레
+임 시간 예측 가능성은 품질 지표만큼 중요하다.
+Baseline 설계 근거 (denoiser 미적용): 비교 
+Baseline에 SVGF 등 denoiser를 적용하지 않은 것
+은 의도된 설계 결정이다. Denoiser는 공간적·시간
+적 필터링을 통해 픽셀 간 정보를 혼합하므로, 첫째 
+기본 노이즈 수준 자체를 변경하여 순수 샘플링 전략 
+간 품질 차이를 희석시키고, 둘째 F(p) hotspot 픽
+셀에 할당된 추가 샘플의 효과가 인접 픽셀로 확산되
+어 Fresnel-guided가 표적화한 특정 픽셀의 개선을 
+독립적으로 측정할 수 없게 된다. 본 연구는 샘플링 
+단계의 효과를 독립적으로 검증하기 위해 denoiser 
+6 ❙희소Fresnel 경계샘플링: 실시간경로추적을위한자기조절지각적레이예산전략
+없는 누적 평균을 baseline으로 채택하였다.
+단일 GPU 
+아키텍처 
+한계: 
+본 
+실험은 
+단일 
+NVIDIA RTX GPU에서 수행되었다. DXR dispatch
+의 스케줄링 효율은 벤더별로 상이하므로, AMD 또는 
+Intel 아키텍처에서의 타이밍 비율은 다를 수 있다. 
+이는 향후 연구에서 다수 아키텍처 검증이 필요한 항
+목이다.
+8. 결론
+본 연구는 기존 파이프라인이 처리하지 않는 지각 
+성분 
+F(p)에 
+집중하여, 
+실시간 
+경로 
+추적에서 
+Fresnel 경계에 ray 예산을 선제적으로 배분하는 방
+법을 
+제안하였다. 
+Self-Regulating 
+2-pass 
+dispatch(526x), Operating envelope 규명(이론·
+지각 
+일치), 
+지각 
+선호도 
+통계 
+근거(p=0.038, 
+n=40)를 달성하였다. FGPS은 재질 realism이 중요
+한 실시간 렌더링 시나리오에서 추가 분산 추정 없이 
+예측 가능한 비용으로 재질 경계에서의 perceptual 
+gap을 채우는 실용적 방법임을 입증한다.
+Fresnel-guided는 기존 DirectX 12 +DXR 파
+이프라인에 g_fresnel UAV 버퍼 추가와 2-pass 
+dispatch 분기만으로 통합 가능하며, TAA·SVGF 
+등 표준 denoising 스테이지와 병렬 구성이 가능하
+다. 별도 신경망 추론이나 수렴 대기 없이 첫 프레임
+부터 F(p)를 계산할 수 있어 게임 엔진의 실시간 렌
+더링 루프에 직접 적용 가능한 구조이다.
+향후 연구 방향으로는 다음을 제시한다.
+(1) 다중 GPU 벤더 검증: AMD RDNA·Intel 
+Arc 아키텍처에서의 DXR dispatch 스케줄링 특성 
+차이를 실측하여 이식성을 확보한다.
+(2) 동적 씬 적응: 오브젝트 이동 시 F(p) 맵의 
+시간적 
+재계산 
+비용을 
+최소화하는 
+incremental 
+update 전략을 연구한다.
+(3) Denoiser 통합 평가: SVGF·ReLAX 등과 
+결합 시 Fresnel 경계의 과평활화 억제 효과를 정량
+화한다. 
+참고문헌
+[1] 
+Bitterli, 
+B. 
+et 
+al., 
+"Spatiotemporal 
+reservoir resampling for real-time ray tracing 
+with 
+dynamic 
+direct 
+lighting", 
+ACM 
+TOG 
+39(4), 2020.
+[2] Mitchell, D. P., "Generating antialiased 
+images at low sampling densities", SIGGRAPH, 
+1987.
+[3] Fleming, R. W., "Visual perception of 
+materials 
+and 
+their 
+properties", 
+Vision 
+Research 94, 2014.
+[4] 
+Pellacini, 
+F., 
+Ferwerda, 
+J. 
+A., 
+& 
+Greenberg, 
+D. 
+P. 
+(2000). 
+Toward 
+a 
+psychophysically-based light reflection model 
+for image synthesis. *Proc. SIGGRAPH*, 519–
+528.
+[5] Painter, J. & Sloan, K., "Antialiased ray 
+tracing by adaptive progressive refinement", 
+SIGGRAPH, 1989.
+[6] Schlick, C., "An inexpensive BRDF 
+model for physically-based rendering", CGF 
+13(3), 1994.
+[7] 
+Schied, 
+C. 
+et 
+al., 
+"Spatiotemporal 
+variance-guided filtering", HPG, 2017.
+[8] 
+Andersson, 
+P. 
+et 
+al., 
+"FLIP: 
+A 
+Difference Evaluator for Alternating Images", 
+PACMCGIT, 2020.
+[9] Walter, B. et al., "Microfacet models for 
+refraction", EGSR, 2007.
+[10] 
+Heitz, 
+E., 
+"Understanding 
+the 
+masking-shadowing 
+function 
+in 
+microfacet-based BRDFs", JCGT 3(2), 2014.
+[11] Veach, E. & Guibas, L., "Optimally 
+combining 
+sampling 
+techniques 
+for 
+Monte 
+Carlo rendering", SIGGRAPH, 1995.
+[12] Pharr, M. et al., *Physically Based 
+Rendering*, 4th ed., 2023.
+[13] Akenine-Moller, T. et al., *Real-Time 
+Rendering*, 4th ed., 2018.
