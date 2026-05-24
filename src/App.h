@@ -75,6 +75,7 @@ private:
 
     // DLSS
     DLSSIntegration m_dlss;
+    Denoiser        m_dlssDenoiser;  // DLSS 입력 클리닝용 render-res 전용 디노이저
     bool            m_dlssEnabled    = false;
     uint32_t        m_dlssFrameIdx   = 0;    // Halton 시퀀스 인덱스
     float           m_dlssJitterX    = 0.0f; // 현재 프레임 Halton X (Evaluate에도 전달)

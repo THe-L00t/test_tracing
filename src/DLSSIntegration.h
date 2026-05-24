@@ -61,6 +61,10 @@ public:
 
     bool IsAvailable() const noexcept { return m_available; }
 
+    // A-trous 디노이저가 render-res에서 읽고 쓸 수 있도록 리소스 노출
+    ID3D12Resource* RenderColorResource() const noexcept { return m_renderColor.Get(); }
+    ID3D12Resource* RenderAccumResource() const noexcept { return m_renderAccum.Get(); }
+
 private:
     NVSDK_NGX_Handle*    m_feature = nullptr;
     NVSDK_NGX_Parameter* m_params  = nullptr;
