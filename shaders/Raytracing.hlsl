@@ -23,6 +23,8 @@
 // ── 리소스 ──────────────────────────────────────────────────────
 RWTexture2D<float4>             g_output       : register(u0);
 RWTexture2D<float4>             g_accumulation : register(u1);
+RWTexture2D<float>              g_depth        : register(u2); // NDC depth [0..1] (DLSS용)
+RWTexture2D<float2>             g_motionVec    : register(u3); // 모션벡터 픽셀 단위 (DLSS용)
 RaytracingAccelerationStructure g_tlas         : register(t0);
 
 struct VertexPN { float3 pos; float3 normal; };
@@ -49,6 +51,12 @@ cbuffer SceneConstants : register(b0)
 
     uint   frameCount;  uint   randomSeed;  float  emissBoxHalfSize; float jitterX;
     float3 emissBoxCenter;  float jitterY;
+
+    // 이전 프레임 카메라 (DLSS 모션벡터 계산용)
+    float3 prevCamPos;     uint   isDLSSMode;
+    float3 prevCamRight;   float  prevTanHalfFovY;
+    float3 prevCamUp;      float  prevAspectRatio;
+    float3 prevCamForward; float  _pad1;
 }
 
 // ── 상수 ────────────────────────────────────────────────────────
@@ -68,6 +76,7 @@ struct RayPayload
     uint   seed;
     uint   depth;
     uint   terminated;
+    float  hitDist;         // 1차 히트 거리 (DLSS depth/motion 계산용, depth==0일 때만 유효)
 };
 
 struct ShadowPayload { float vis; };
@@ -431,11 +440,40 @@ void RayGen()
         payload.seed          = seed;
         payload.depth         = bounce;
         payload.terminated    = 0u;
+        payload.hitDist       = ray.TMax;
 
         TraceRay(g_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
 
         seed = payload.seed;
         radiance += throughput * payload.emission;
+
+        // 1차 히트에서 DLSS용 depth/motionVec 출력
+        if (bounce == 0u && isDLSSMode)
+        {
+            float t = payload.hitDist;
+            // NDC depth [0..1] (D3D12 컨벤션: near=0, far=1)
+            const float nearZ = 0.1f, farZ = 1000.0f;
+            float ndcZ = saturate(farZ * (t - nearZ) / (t * (farZ - nearZ)));
+            g_depth[idx] = ndcZ;
+
+            // 히트 월드 좌표 → 이전 카메라 재투영 → 픽셀 단위 모션벡터
+            float3 hitW   = ray.Origin + ray.Direction * t;
+            float3 pLocal = hitW - prevCamPos;
+            float  pz     = dot(pLocal, prevCamForward);
+            float2 mv     = float2(0.0f, 0.0f);
+            if (pz > 0.001f)
+            {
+                float px = dot(pLocal, prevCamRight);
+                float py = dot(pLocal, prevCamUp);
+                float prevNdcX = px / (pz * prevAspectRatio  * prevTanHalfFovY);
+                float prevNdcY = py / (pz * prevTanHalfFovY);
+                float2 prevUV  = float2(prevNdcX * 0.5f + 0.5f,
+                                        1.0f - (prevNdcY * 0.5f + 0.5f));
+                float2 currUV  = ((float2)idx + 0.5f) / (float2)dim;
+                mv = (currUV - prevUV) * (float2)dim;  // 렌더 해상도 픽셀 단위
+            }
+            g_motionVec[idx] = mv;
+        }
 
         if (payload.terminated != 0u) break;
 
@@ -474,6 +512,9 @@ void RayGen()
 [shader("miss")]
 void MissShader(inout RayPayload payload)
 {
+    // 1차 레이가 미스(스카이)인 경우 far depth 기록
+    if (payload.depth == 0u) payload.hitDist = RayTMax();
+
     float3 d = normalize(WorldRayDirection());
 
     if (sceneID == 0)
@@ -537,6 +578,8 @@ void ClosestHit(inout RayPayload payload,
     bool entering = dot(rawN, V) >= 0.0f;
 
     float3 hitPos    = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+    if (payload.depth == 0u) payload.hitDist = RayTCurrent(); // DLSS depth용
+
     float3 albedo    = matAlbedoRoughness[matIdx].xyz;
     float  metallic  = matMetallic[matIdx];
     float  roughness = matAlbedoRoughness[matIdx].w;

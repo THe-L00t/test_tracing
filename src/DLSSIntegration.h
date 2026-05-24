@@ -61,9 +61,11 @@ public:
 
     bool IsAvailable() const noexcept { return m_available; }
 
-    // A-trous 디노이저가 render-res에서 읽고 쓸 수 있도록 리소스 노출
+    // render-res 리소스 접근자 (A-trous 디노이저, App)
     ID3D12Resource* RenderColorResource() const noexcept { return m_renderColor.Get(); }
     ID3D12Resource* RenderAccumResource() const noexcept { return m_renderAccum.Get(); }
+    ID3D12Resource* DepthResource()       const noexcept { return m_depth.Get(); }
+    ID3D12Resource* MotionVecResource()   const noexcept { return m_motionVec.Get(); }
 
 private:
     NVSDK_NGX_Handle*    m_feature = nullptr;

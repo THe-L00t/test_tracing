@@ -107,6 +107,12 @@ struct alignas(16) SceneCB
     float    jitterX;             // DLSS Halton 지터 X [-0.5, 0.5] (비DLSS 시 0)
     float    emissBoxCenter[3];   // 발광 박스 중심
     float    jitterY;             // DLSS Halton 지터 Y [-0.5, 0.5] (비DLSS 시 0)
+
+    // 이전 프레임 카메라 (DLSS 모션벡터 계산용) (64)
+    float    prevCamPos[3];       uint32_t isDLSSMode;
+    float    prevCamRight[3];     float    prevTanHalfFovY;
+    float    prevCamUp[3];        float    prevAspectRatio;
+    float    prevCamForward[3];   float    _pad1;
 };
-// 검증: 64+32+32+64+16+16+16+16 = 256
-static_assert(sizeof(SceneCB) == 256, "SceneCB must be 256 bytes");
+// 검증: 64+32+32+64+16+16+32+64 = 320
+static_assert(sizeof(SceneCB) == 320, "SceneCB must be 320 bytes");

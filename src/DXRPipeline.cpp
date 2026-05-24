@@ -86,7 +86,7 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     D3D12_DESCRIPTOR_RANGE1 ranges[2]{};
 
     ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    ranges[0].NumDescriptors                    = 2;   // u0(output) + u1(accumulation)
+    ranges[0].NumDescriptors                    = 4;   // u0(output)+u1(accum)+u2(depth)+u3(motionVec)
     ranges[0].BaseShaderRegister                = 0;
     ranges[0].RegisterSpace                     = 0;
     ranges[0].OffsetInDescriptorsFromTableStart = 0;
@@ -96,7 +96,7 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[1].NumDescriptors                    = 5;   // t0(TLAS) + t1(plane) + t2(cube) + t3(room) + t4(sphere)
     ranges[1].BaseShaderRegister                = 0;
     ranges[1].RegisterSpace                     = 0;
-    ranges[1].OffsetInDescriptorsFromTableStart = 2;   // 힙 슬롯 2부터 (UAV 2개 다음)
+    ranges[1].OffsetInDescriptorsFromTableStart = 4;   // 힙 슬롯 4부터 (UAV 4개 다음)
     ranges[1].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     D3D12_ROOT_PARAMETER1 params[2]{};
@@ -160,7 +160,7 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
     //    RayPayload: float3×4 + float(scatterPdf) + uint×3 = 48+4+12 = 64 bytes
     //    ShadowPayload: float = 4 bytes
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig{};
-    shaderConfig.MaxPayloadSizeInBytes   = 64;  // RayPayload 크기
+    shaderConfig.MaxPayloadSizeInBytes   = 68;  // RayPayload 크기 (hitDist 추가로 68)
     shaderConfig.MaxAttributeSizeInBytes = sizeof(float) * 2;  // 배리센트릭
 
     // 4. 파이프라인 설정

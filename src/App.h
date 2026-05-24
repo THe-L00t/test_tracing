@@ -76,6 +76,18 @@ private:
     // DLSS
     DLSSIntegration m_dlss;
     Denoiser        m_dlssDenoiser;  // DLSS 입력 클리닝용 render-res 전용 디노이저
+
+    // 이전 프레임 카메라 (모션벡터 계산용, UpdateSceneCB 끝에 갱신)
+    float m_prevCamPos[3]     = {};
+    float m_prevCamRight[3]   = {1,0,0};
+    float m_prevCamUp[3]      = {0,1,0};
+    float m_prevCamForward[3] = {0,0,1};
+    float m_prevTanHalfFovY   = 0.57735f;
+    float m_prevAspectRatio   = 16.0f / 9.0f;
+
+    // 일반 모드 u2/u3 용 더미 UAV 텍스처 (1×1, DLSS 미사용 시 바인딩)
+    ComPtr<ID3D12Resource> m_dummyDepthTex;
+    ComPtr<ID3D12Resource> m_dummyMotionTex;
     bool            m_dlssEnabled    = false;
     uint32_t        m_dlssFrameIdx   = 0;    // Halton 시퀀스 인덱스
     float           m_dlssJitterX    = 0.0f; // 현재 프레임 Halton X (Evaluate에도 전달)

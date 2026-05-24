@@ -243,7 +243,7 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
 
         D3D12_RESOURCE_DESC cbDesc{};
         cbDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        cbDesc.Width            = 256;
+        cbDesc.Width            = 512;  // sizeof(SceneCB)=320, D3D12 256바이트 정렬 → 512
         cbDesc.Height           = 1;
         cbDesc.DepthOrArraySize = 1;
         cbDesc.MipLevels        = 1;
@@ -359,27 +359,66 @@ void App::BuildBLASes()
 }
 
 // ---------------------------------------------------------------
-// 디스크립터 힙 구성
+// 디스크립터 힙 구성 (일반 모드)
 // 슬롯 0: UAV u0 (g_output,       RGBA8   – RenderTarget::Init 내부)
 // 슬롯 1: UAV u1 (g_accumulation, RGBA32F – RenderTarget::Init 내부)
-// 슬롯 2: SRV t0 (TLAS)
-// 슬롯 3: SRV t1 (plane VB)
-// 슬롯 4: SRV t2 (cube VB)
-// 슬롯 5: SRV t3 (room VB)
+// 슬롯 2: UAV u2 (더미 depth,     R32_FLOAT  1×1 – 일반 모드 자리채움)
+// 슬롯 3: UAV u3 (더미 motionVec, R16G16F    1×1 – 일반 모드 자리채움)
+// 슬롯 4: SRV t0 (TLAS)
+// 슬롯 5: SRV t1 (plane VB)
+// 슬롯 6: SRV t2 (cube VB)
+// 슬롯 7: SRV t3 (room VB)
+// 슬롯 8: SRV t4 (sphere VB)
+// DLSS 모드 추가 슬롯 (DLSSIntegration::Init 에서 할당):
+// 슬롯 9: UAV m_renderColor, 슬롯10: UAV m_renderAccum
+// 슬롯11: UAV m_depth,       슬롯12: UAV m_motionVec
+// 슬롯13: SRV TLAS 미러,     슬롯14-17: SRV VB 미러
 // ---------------------------------------------------------------
 void App::BuildDescriptors()
 {
     auto& heap   = m_core.CbvSrvUavHeap();
     auto* device = m_core.Device();
 
-    // 슬롯 0: UAV (렌더 타겟)
+    // 슬롯 0,1: UAV u0(g_output), u1(g_accumulation)
     m_renderTarget.Init(device, heap, m_width, m_height);
 
-    // 슬롯 2: SRV (TLAS)  ← 슬롯 0,1은 RenderTarget::Init에서 UAV로 사용
+    // 슬롯 2,3: 더미 UAV (u2=depth, u3=motionVec, 일반 모드에서 셰이더가 isDLSSMode=0으로 건너뜀)
+    // 루트 시그니처가 u0..u3를 선언하므로 유효한 디스크립터가 필요
+    auto makeUAVTex1x1 = [&](DXGI_FORMAT fmt) -> ComPtr<ID3D12Resource>
+    {
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        rd.Width = 1; rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format = fmt; rd.SampleDesc = {1, 0};
+        rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        rd.Flags  = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        ComPtr<ID3D12Resource> res;
+        ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&res)));
+        return res;
+    };
+    if (!m_dummyDepthTex)  m_dummyDepthTex  = makeUAVTex1x1(DXGI_FORMAT_R32_FLOAT);
+    if (!m_dummyMotionTex) m_dummyMotionTex = makeUAVTex1x1(DXGI_FORMAT_R16G16_FLOAT);
+
+    {
+        DescriptorHandle h = heap.Allocate();  // slot 2
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format = DXGI_FORMAT_R32_FLOAT;
+        device->CreateUnorderedAccessView(m_dummyDepthTex.Get(), nullptr, &uav, h.cpu);
+    }
+    {
+        DescriptorHandle h = heap.Allocate();  // slot 3
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format = DXGI_FORMAT_R16G16_FLOAT;
+        device->CreateUnorderedAccessView(m_dummyMotionTex.Get(), nullptr, &uav, h.cpu);
+    }
+
+    // 슬롯 4: SRV (TLAS)  ← 슬롯 0..3은 UAV
     m_tlasSRV = heap.Allocate();
     RebuildTLASSRV();
 
-    // 슬롯 3: SRV (plane VB)
+    // 슬롯 5: SRV (plane VB)
     m_planeVbSRV = heap.Allocate();
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -392,7 +431,7 @@ void App::BuildDescriptors()
         device->CreateShaderResourceView(m_planeBLAS.VertexBuffer(), &srvDesc, m_planeVbSRV.cpu);
     }
 
-    // 슬롯 4: SRV (cube VB)
+    // 슬롯 6: SRV (cube VB)
     m_cubeVbSRV = heap.Allocate();
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -405,7 +444,7 @@ void App::BuildDescriptors()
         device->CreateShaderResourceView(m_cubeBLAS.VertexBuffer(), &srvDesc, m_cubeVbSRV.cpu);
     }
 
-    // 슬롯 5: SRV (room VB)
+    // 슬롯 7: SRV (room VB)
     m_roomVbSRV = heap.Allocate();
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -418,7 +457,7 @@ void App::BuildDescriptors()
         device->CreateShaderResourceView(m_roomBLAS.VertexBuffer(), &srvDesc, m_roomVbSRV.cpu);
     }
 
-    // 슬롯 6: SRV (sphere VB)
+    // 슬롯 8: SRV (sphere VB)
     m_sphereVbSRV = heap.Allocate();
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -773,6 +812,23 @@ void App::UpdateSceneCB()
         m_dlssJitterY = cb.jitterY = 0.0f;
     }
 
+    // 이전 프레임 카메라 (DLSS 모션벡터 계산용)
+    std::memcpy(cb.prevCamPos,     m_prevCamPos,     sizeof(float) * 3);
+    cb.isDLSSMode = (m_dlssEnabled && m_dlss.IsAvailable()) ? 1u : 0u;
+    std::memcpy(cb.prevCamRight,   m_prevCamRight,   sizeof(float) * 3);
+    cb.prevTanHalfFovY = m_prevTanHalfFovY;
+    std::memcpy(cb.prevCamUp,      m_prevCamUp,      sizeof(float) * 3);
+    cb.prevAspectRatio  = m_prevAspectRatio;
+    std::memcpy(cb.prevCamForward, m_prevCamForward, sizeof(float) * 3);
+
+    // 현재 카메라를 다음 프레임의 "이전 카메라"로 저장
+    std::memcpy(m_prevCamPos,     pos,     sizeof(float) * 3);
+    std::memcpy(m_prevCamRight,   right,   sizeof(float) * 3);
+    std::memcpy(m_prevCamUp,      up,      sizeof(float) * 3);
+    std::memcpy(m_prevCamForward, forward, sizeof(float) * 3);
+    m_prevTanHalfFovY = cb.tanHalfFovY;
+    m_prevAspectRatio  = cb.aspectRatio;
+
     // 업로드 버퍼에 직접 기록
     void* mapped = nullptr;
     D3D12_RANGE readRange{ 0, 0 };
@@ -862,6 +918,9 @@ void App::OnRender()
     ID3D12DescriptorHeap* heaps[] = { m_core.CbvSrvUavHeap().Get() };
     cmd->SetDescriptorHeaps(1, heaps);
 
+    // DLSS 시간적 히스토리 리셋 여부를 누적 버퍼 클리어 전에 캡처
+    bool dlssReset = m_accumDirty;
+
     // 씬 전환 / 디노이저 토글 시: 이전 씬 잔상 제거
     if (m_accumDirty)
     {
@@ -878,9 +937,9 @@ void App::OnRender()
     if (m_dlssEnabled && m_dlss.IsAvailable())
     {
         // ── DLSS 경로 ─────────────────────────────────────────────
-        // 디스크립터 테이블 베이스를 힙 슬롯 7 로 (render-res UAV + SRV 미러)
+        // 디스크립터 테이블 베이스를 힙 슬롯 9 로 (render-res UAV u0..u3 + SRV 미러)
         cmd->SetComputeRootDescriptorTable(0,
-            m_core.CbvSrvUavHeap().GetHandle(7).gpu);
+            m_core.CbvSrvUavHeap().GetHandle(9).gpu);
 
         D3D12_DISPATCH_RAYS_DESC dr{};
         dr.RayGenerationShaderRecord = st.RayGenRange();
@@ -904,9 +963,7 @@ void App::OnRender()
 
         // DLSS 업스케일: render-res → display-res
         // m_dlssJitterX/Y 는 UpdateSceneCB 에서 이미 계산된 값
-        bool resetDlss = m_accumDirty;
-        m_accumDirty   = false;
-        m_dlss.Evaluate(cmd, m_dlssJitterX, m_dlssJitterY, resetDlss);
+        m_dlss.Evaluate(cmd, m_dlssJitterX, m_dlssJitterY, dlssReset);
 
         ++m_dlssFrameIdx;
 

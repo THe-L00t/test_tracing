@@ -98,8 +98,9 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     m_renderColor = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R8G8B8A8_UNORM);
     m_renderAccum = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R32G32B32A32_FLOAT);
     m_dlssOutput  = MakeUAVTex(device, displayW,  displayH,  DXGI_FORMAT_R8G8B8A8_UNORM);
-    m_depth       = MakeSRVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R32_FLOAT);
-    m_motionVec   = MakeSRVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R16G16_FLOAT);
+    // depth/motionVec: RT 셰이더가 쓰고 DLSS가 읽으므로 UAV로 생성
+    m_depth       = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R32_FLOAT);
+    m_motionVec   = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R16G16_FLOAT);
 
     m_renderColor->SetName(L"DLSS_RenderColor");
     m_renderAccum->SetName(L"DLSS_RenderAccum");
@@ -109,7 +110,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     // shader-visible 힙은 CPU read 불가 → CopyDescriptors 사용 불가
     // 리소스 포인터로 SRV를 직접 생성한다.
 
-    // 슬롯 7: UAV m_renderColor (u0 용)
+    // 슬롯 9: UAV m_renderColor (u0 용)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -117,7 +118,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R8G8B8A8_UNORM;
         device->CreateUnorderedAccessView(m_renderColor.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 8: UAV m_renderAccum (u1 용)
+    // 슬롯 10: UAV m_renderAccum (u1 용)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -125,7 +126,23 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R32G32B32A32_FLOAT;
         device->CreateUnorderedAccessView(m_renderAccum.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 9: SRV TLAS 미러
+    // 슬롯 11: UAV m_depth (u2 용, RT 셰이더가 기록)
+    {
+        DescriptorHandle h = sharedHeap.Allocate();
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format        = DXGI_FORMAT_R32_FLOAT;
+        device->CreateUnorderedAccessView(m_depth.Get(), nullptr, &uav, h.cpu);
+    }
+    // 슬롯 12: UAV m_motionVec (u3 용, RT 셰이더가 기록)
+    {
+        DescriptorHandle h = sharedHeap.Allocate();
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format        = DXGI_FORMAT_R16G16_FLOAT;
+        device->CreateUnorderedAccessView(m_motionVec.Get(), nullptr, &uav, h.cpu);
+    }
+    // 슬롯 13: SRV TLAS 미러
     {
         DescriptorHandle h = sharedHeap.Allocate();
         m_tlasMirrorCPU = h.cpu;
@@ -214,37 +231,57 @@ void DLSSIntegration::UAVBarriers(ID3D12GraphicsCommandList* cmdList)
 void DLSSIntegration::Evaluate(ID3D12GraphicsCommandList* cmdList,
                                 float jitterX, float jitterY, bool reset)
 {
-    // m_renderColor: UAV → SRV (DLSS 가 컴퓨트로 읽음)
-    D3D12_RESOURCE_BARRIER toSRV{};
-    toSRV.Type                          = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    toSRV.Transition.pResource          = m_renderColor.Get();
-    toSRV.Transition.StateBefore        = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    toSRV.Transition.StateAfter         = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    toSRV.Transition.Subresource        = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    cmdList->ResourceBarrier(1, &toSRV);
+    // color/depth/motionVec: UAV → NON_PIXEL_SHADER_RESOURCE (DLSS 입력)
+    auto makeTransition = [](ID3D12Resource* res,
+                              D3D12_RESOURCE_STATES before,
+                              D3D12_RESOURCE_STATES after) -> D3D12_RESOURCE_BARRIER
+    {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource   = res;
+        b.Transition.StateBefore = before;
+        b.Transition.StateAfter  = after;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        return b;
+    };
+
+    D3D12_RESOURCE_BARRIER toSRV[3] = {
+        makeTransition(m_renderColor.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        makeTransition(m_depth.Get(),       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        makeTransition(m_motionVec.Get(),   D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+    };
+    cmdList->ResourceBarrier(3, toSRV);
 
     NVSDK_NGX_D3D12_DLSS_Eval_Params ep{};
-    ep.Feature.pInColor            = m_renderColor.Get();
-    ep.Feature.pInOutput           = m_dlssOutput.Get();
-    ep.Feature.InSharpness         = 0.0f;
-    ep.pInDepth                    = m_depth.Get();
-    ep.pInMotionVectors            = m_motionVec.Get();
-    ep.InJitterOffsetX             = jitterX;
-    ep.InJitterOffsetY             = jitterY;
-    ep.InReset                     = reset ? 1 : 0;
-    ep.InMVScaleX                  = 1.0f;
-    ep.InMVScaleY                  = 1.0f;
-    ep.InRenderSubrectDimensions   = { m_renderW, m_renderH };
+    ep.Feature.pInColor          = m_renderColor.Get();
+    ep.Feature.pInOutput         = m_dlssOutput.Get();
+    ep.Feature.InSharpness       = 0.0f;
+    ep.pInDepth                  = m_depth.Get();
+    ep.pInMotionVectors          = m_motionVec.Get();
+    ep.InJitterOffsetX           = jitterX;
+    ep.InJitterOffsetY           = jitterY;
+    ep.InReset                   = reset ? 1 : 0;
+    ep.InMVScaleX                = 1.0f;  // 픽셀 단위 모션벡터
+    ep.InMVScaleY                = 1.0f;
+    ep.InRenderSubrectDimensions = { m_renderW, m_renderH };
 
     NVSDK_NGX_Result res = NGX_D3D12_EVALUATE_DLSS_EXT(cmdList, m_feature, m_params, &ep);
     if (NVSDK_NGX_FAILED(res))
         std::println("[DLSS] Evaluate 실패: 0x{:08X}", static_cast<uint32_t>(res));
 
-    // m_renderColor: SRV → UAV (다음 프레임 DispatchRays 에서 씀)
-    D3D12_RESOURCE_BARRIER toUAV = toSRV;
-    toUAV.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    toUAV.Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    cmdList->ResourceBarrier(1, &toUAV);
+    // NON_PIXEL_SHADER_RESOURCE → UAV 복원 (다음 프레임 DispatchRays 에서 씀)
+    D3D12_RESOURCE_BARRIER toUAV[3] = {
+        makeTransition(m_renderColor.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        makeTransition(m_depth.Get(),       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        makeTransition(m_motionVec.Get(),   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+    };
+    cmdList->ResourceBarrier(3, toUAV);
 }
 
 // ── CopyOutputToBackBuffer ────────────────────────────────────────
