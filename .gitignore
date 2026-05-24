@@ -12,3 +12,6 @@ ipch/
 *.ilk
 *.exp
 *.idb
+
+# DLSS runtime DLLs (large binaries — download separately via third_party/dlss/README.md)
+third_party/dlss/bin/*.dll
