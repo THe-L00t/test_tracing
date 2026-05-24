@@ -44,11 +44,11 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
                             uint32_t                    displayW,
                             uint32_t                    displayH,
                             DescriptorHeap&             sharedHeap,
-                            D3D12_CPU_DESCRIPTOR_HANDLE tlasCPU,
-                            D3D12_CPU_DESCRIPTOR_HANDLE planeVbCPU,
-                            D3D12_CPU_DESCRIPTOR_HANDLE cubeVbCPU,
-                            D3D12_CPU_DESCRIPTOR_HANDLE roomVbCPU,
-                            D3D12_CPU_DESCRIPTOR_HANDLE sphereVbCPU)
+                            D3D12_GPU_VIRTUAL_ADDRESS   tlasGpuVA,
+                            ID3D12Resource*             planeVb,   uint32_t planeVertCount,
+                            ID3D12Resource*             cubeVb,    uint32_t cubeVertCount,
+                            ID3D12Resource*             roomVb,    uint32_t roomVertCount,
+                            ID3D12Resource*             sphereVb,  uint32_t sphereVertCount)
 {
     m_displayW = displayW;
     m_displayH = displayH;
@@ -106,6 +106,9 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     m_dlssOutput ->SetName(L"DLSS_Output");
 
     // ── 4. 공유 힙에 UAV/SRV 등록 ───────────────────────────────
+    // shader-visible 힙은 CPU read 불가 → CopyDescriptors 사용 불가
+    // 리소스 포인터로 SRV를 직접 생성한다.
+
     // 슬롯 7: UAV m_renderColor (u0 용)
     {
         DescriptorHandle h = sharedHeap.Allocate();
@@ -122,17 +125,33 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R32G32B32A32_FLOAT;
         device->CreateUnorderedAccessView(m_renderAccum.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 9..13: SRV 미러 (TLAS, plane, cube, room, sphere)
-    const D3D12_CPU_DESCRIPTOR_HANDLE srcs[5] = {
-        tlasCPU, planeVbCPU, cubeVbCPU, roomVbCPU, sphereVbCPU
-    };
-    for (int i = 0; i < 5; ++i)
+    // 슬롯 9: SRV TLAS 미러
     {
-        DescriptorHandle dst = sharedHeap.Allocate();
-        if (i == 0) m_tlasMirrorCPU = dst.cpu;
-        device->CopyDescriptorsSimple(1, dst.cpu, srcs[i],
-                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        DescriptorHandle h = sharedHeap.Allocate();
+        m_tlasMirrorCPU = h.cpu;
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.ViewDimension            = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
+        srvDesc.Shader4ComponentMapping  = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.RaytracingAccelerationStructure.Location = tlasGpuVA;
+        device->CreateShaderResourceView(nullptr, &srvDesc, h.cpu);
     }
+    // 슬롯 10..13: SRV VB 미러 (plane, cube, room, sphere)
+    auto makeVbSRV = [&](ID3D12Resource* vb, uint32_t cnt)
+    {
+        DescriptorHandle h = sharedHeap.Allocate();
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Buffer.FirstElement        = 0;
+        srvDesc.Buffer.NumElements         = cnt;
+        srvDesc.Buffer.StructureByteStride = 24; // sizeof(VertexPN): float3 pos + float3 normal
+        srvDesc.Buffer.Flags               = D3D12_BUFFER_SRV_FLAG_NONE;
+        device->CreateShaderResourceView(vb, &srvDesc, h.cpu);
+    };
+    makeVbSRV(planeVb,  planeVertCount);
+    makeVbSRV(cubeVb,   cubeVertCount);
+    makeVbSRV(roomVb,   roomVertCount);
+    makeVbSRV(sphereVb, sphereVertCount);
 
     // ── 5. DLSS 피처 생성 ─────────────────────────────────────────
     NVSDK_NGX_DLSS_Create_Params cp{};
@@ -170,11 +189,14 @@ void DLSSIntegration::Shutdown(ID3D12Device* device)
 
 // ── RefreshTLASSRV ────────────────────────────────────────────────
 void DLSSIntegration::RefreshTLASSRV(ID3D12Device* device,
-                                      D3D12_CPU_DESCRIPTOR_HANDLE tlasCPU)
+                                      D3D12_GPU_VIRTUAL_ADDRESS tlasGpuVA)
 {
     if (!m_available) return;
-    device->CopyDescriptorsSimple(1, m_tlasMirrorCPU, tlasCPU,
-                                   D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.ViewDimension            = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
+    srvDesc.Shader4ComponentMapping  = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.RaytracingAccelerationStructure.Location = tlasGpuVA;
+    device->CreateShaderResourceView(nullptr, &srvDesc, m_tlasMirrorCPU);
 }
 
 // ── UAVBarriers ───────────────────────────────────────────────────

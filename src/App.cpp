@@ -297,15 +297,20 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
     m_denoiser.Init(m_core.Device(), width, height);
 
     // DLSS 초기화 (NVIDIA GPU + 지원 드라이버 필요)
+    // NGX_D3D12_CREATE_DLSS_EXT 가 GPU 커맨드를 기록하므로 열린 cmdList 필요
+    ThrowIfFailed(m_core.CmdAlloc(0)->Reset());
+    ThrowIfFailed(m_core.CmdList()->Reset(m_core.CmdAlloc(0), nullptr));
+
     // BuildDescriptors() 이후에 호출 → 힙 슬롯 7..13 사용
+    // shader-visible 힙은 CopyDescriptors src 불가 → 리소스 직접 전달
     if (m_dlss.Init(m_core.Device(), m_core.CmdList(),
                     width, height,
                     m_core.CbvSrvUavHeap(),
-                    m_tlasSRV.cpu,
-                    m_planeVbSRV.cpu,
-                    m_cubeVbSRV.cpu,
-                    m_roomVbSRV.cpu,
-                    m_sphereVbSRV.cpu))
+                    m_tlas.Resource()->GetGPUVirtualAddress(),
+                    m_planeBLAS.VertexBuffer(), m_planeBLAS.VertexCount(),
+                    m_cubeBLAS.VertexBuffer(),  m_cubeBLAS.VertexCount(),
+                    m_roomBLAS.VertexBuffer(),  m_roomBLAS.VertexCount(),
+                    m_sphereBLAS.VertexBuffer(), m_sphereBLAS.VertexCount()))
     {
         m_dlssEnabled = true;
         std::println("[App] DLSS 기본 활성화 — U 키로 토글");
@@ -534,7 +539,7 @@ void App::SwitchScene(uint32_t id)
 
     // TLAS SRV 갱신 (메인 슬롯 + DLSS 미러 슬롯)
     RebuildTLASSRV();
-    m_dlss.RefreshTLASSRV(m_core.Device(), m_tlasSRV.cpu);
+    m_dlss.RefreshTLASSRV(m_core.Device(), m_tlas.Resource()->GetGPUVirtualAddress());
 }
 
 // ---------------------------------------------------------------

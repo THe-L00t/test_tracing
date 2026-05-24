@@ -25,21 +25,22 @@ class DLSSIntegration
 {
 public:
     // BuildDescriptors() 완료 후 호출. 힙 슬롯 7..13 에 UAV/SRV 등록.
+    // shader-visible 힙은 CopyDescriptors src 불가 → 리소스 직접 전달하여 SRV 재생성
     bool Init(ID3D12Device*               device,
               ID3D12GraphicsCommandList*  cmdList,
               uint32_t                    displayW,
               uint32_t                    displayH,
               DescriptorHeap&             sharedHeap,
-              D3D12_CPU_DESCRIPTOR_HANDLE tlasCPU,
-              D3D12_CPU_DESCRIPTOR_HANDLE planeVbCPU,
-              D3D12_CPU_DESCRIPTOR_HANDLE cubeVbCPU,
-              D3D12_CPU_DESCRIPTOR_HANDLE roomVbCPU,
-              D3D12_CPU_DESCRIPTOR_HANDLE sphereVbCPU);
+              D3D12_GPU_VIRTUAL_ADDRESS   tlasGpuVA,
+              ID3D12Resource*             planeVb,   uint32_t planeVertCount,
+              ID3D12Resource*             cubeVb,    uint32_t cubeVertCount,
+              ID3D12Resource*             roomVb,    uint32_t roomVertCount,
+              ID3D12Resource*             sphereVb,  uint32_t sphereVertCount);
 
     void Shutdown(ID3D12Device* device);
 
     // 씬 전환 후 TLAS SRV 미러(슬롯 9) 갱신
-    void RefreshTLASSRV(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE tlasCPU);
+    void RefreshTLASSRV(ID3D12Device* device, D3D12_GPU_VIRTUAL_ADDRESS tlasGpuVA);
 
     // RT 셰이더 디스패치 해상도 (레더 해상도)
     uint32_t RenderWidth()  const noexcept { return m_renderW; }
