@@ -512,8 +512,7 @@ void RayGen()
 [shader("miss")]
 void MissShader(inout RayPayload payload)
 {
-    // 1차 레이가 미스(스카이)인 경우 far depth 기록
-    if (payload.depth == 0u) payload.hitDist = RayTMax();
+    // payload.hitDist 는 RayGen 에서 ray.TMax 로 미리 초기화됨 → 별도 기록 불필요
 
     float3 d = normalize(WorldRayDirection());
 
