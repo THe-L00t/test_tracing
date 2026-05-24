@@ -55,7 +55,7 @@
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)third_party\dlss\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>Disabled</Optimization>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
@@ -63,7 +63,8 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;nvsdk_ngx_d_dbg.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)third_party\dlss\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
 
@@ -74,7 +75,7 @@
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)third_party\dlss\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -84,7 +85,8 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;nvsdk_ngx_d.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)third_party\dlss\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
 
@@ -100,6 +102,7 @@
     <ClCompile Include="src\RenderTarget.cpp" />
     <ClCompile Include="src\TextOverlay.cpp" />
     <ClCompile Include="src\Denoiser.cpp" />
+    <ClCompile Include="src\DLSSIntegration.cpp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -114,6 +117,7 @@
     <ClInclude Include="src\Common.h" />
     <ClInclude Include="src\TextOverlay.h" />
     <ClInclude Include="src\Denoiser.h" />
+    <ClInclude Include="src\DLSSIntegration.h" />
   </ItemGroup>
 
   <ItemGroup>
@@ -122,10 +126,11 @@
   </ItemGroup>
 
   <!-- dxcompiler.dll / dxil.dll: DXR 런타임 셰이더 컴파일에 필요 -->
+  <!-- nvngx_dlss.dll: DLSS 런타임 (third_party/dlss/bin/ 에서 복사) -->
   <ItemDefinitionGroup>
     <PostBuildEvent>
-      <Command>copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxcompiler.dll" "$(OutDir)dxcompiler.dll" &amp; copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxil.dll" "$(OutDir)dxil.dll"</Command>
-      <Message>DXC 런타임 DLL 복사 중...</Message>
+      <Command>copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxcompiler.dll" "$(OutDir)dxcompiler.dll" &amp; copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxil.dll" "$(OutDir)dxil.dll" &amp; if exist "$(ProjectDir)third_party\dlss\bin\nvngx_dlss.dll" copy /y "$(ProjectDir)third_party\dlss\bin\nvngx_dlss.dll" "$(OutDir)nvngx_dlss.dll"</Command>
+      <Message>DXC / DLSS DLL 복사 중...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
 

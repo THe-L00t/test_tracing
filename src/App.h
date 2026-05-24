@@ -6,6 +6,7 @@
 #include "AccelerationStructure.h"
 #include "RenderTarget.h"
 #include "Denoiser.h"
+#include "DLSSIntegration.h"
 #include <chrono>
 
 class App
@@ -71,6 +72,13 @@ private:
     // 디노이저
     Denoiser m_denoiser;
     bool     m_denoiseEnabled = false;
+
+    // DLSS
+    DLSSIntegration m_dlss;
+    bool            m_dlssEnabled    = false;
+    uint32_t        m_dlssFrameIdx   = 0;    // Halton 시퀀스 인덱스
+    float           m_dlssJitterX    = 0.0f; // 현재 프레임 Halton X (Evaluate에도 전달)
+    float           m_dlssJitterY    = 0.0f; // 현재 프레임 Halton Y
 
     // 패스 트레이싱 누적
     uint32_t m_frameCount   = 0;

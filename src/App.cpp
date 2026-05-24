@@ -296,13 +296,37 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
     // 디노이저 초기화
     m_denoiser.Init(m_core.Device(), width, height);
 
+    // DLSS 초기화 (NVIDIA GPU + 지원 드라이버 필요)
+    // BuildDescriptors() 이후에 호출 → 힙 슬롯 7..13 사용
+    if (m_dlss.Init(m_core.Device(), m_core.CmdList(),
+                    width, height,
+                    m_core.CbvSrvUavHeap(),
+                    m_tlasSRV.cpu,
+                    m_planeVbSRV.cpu,
+                    m_cubeVbSRV.cpu,
+                    m_roomVbSRV.cpu,
+                    m_sphereVbSRV.cpu))
+    {
+        m_dlssEnabled = true;
+        std::println("[App] DLSS 기본 활성화 — U 키로 토글");
+    }
+    else
+    {
+        std::println("[App] DLSS 비활성 (비NVIDIA GPU 또는 미지원 드라이버)");
+    }
+
+    // DLSS 피처 생성 커맨드를 GPU에 제출
+    m_core.SubmitAndFlush();
+
     m_sceneBuilt = true;
     std::println("[App] 초기화 완료 - 씬 0 (야외)");
-    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, D 디노이저 토글, ESC 종료");
+    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, R 디노이저, U DLSS, ESC 종료");
 }
 
 void App::Shutdown()
 {
+    m_core.FlushGPU();
+    m_dlss.Shutdown(m_core.Device());
     m_denoiser.Shutdown();
     m_core.Shutdown();
 }
@@ -508,8 +532,9 @@ void App::SwitchScene(uint32_t id)
 
     m_core.SubmitAndFlush();
 
-    // TLAS SRV 갱신
+    // TLAS SRV 갱신 (메인 슬롯 + DLSS 미러 슬롯)
     RebuildTLASSRV();
+    m_dlss.RefreshTLASSRV(m_core.Device(), m_tlasSRV.cpu);
 }
 
 // ---------------------------------------------------------------
@@ -714,8 +739,30 @@ void App::UpdateSceneCB()
     }
 
     // 패스 트레이싱 누적 파라미터
-    cb.frameCount  = m_frameCount;
-    cb.randomSeed  = m_frameCount;  // 프레임마다 달라지는 시드
+    // DLSS 모드: 프레임당 1spp 사용 (DLSS가 시간적 누적 담당)
+    cb.frameCount = (m_dlssEnabled && m_dlss.IsAvailable()) ? 0u : m_frameCount;
+    cb.randomSeed = m_frameCount;  // 프레임마다 달라지는 시드
+
+    // DLSS Halton 지터 (비DLSS 시 0 → 셰이더에서 무효)
+    if (m_dlssEnabled && m_dlss.IsAvailable())
+    {
+        // Halton(base2, base3), 1-indexed, 32 프레임 주기
+        auto halton = [](int i, int b) -> float {
+            float f = 1.0f, r = 0.0f;
+            while (i > 0) { f /= b; r += f * (i % b); i /= b; }
+            return r;
+        };
+        int hi         = int(m_dlssFrameIdx % 32) + 1;
+        m_dlssJitterX  = halton(hi, 2) - 0.5f;
+        m_dlssJitterY  = halton(hi, 3) - 0.5f;
+        cb.jitterX     = m_dlssJitterX;
+        cb.jitterY     = m_dlssJitterY;
+    }
+    else
+    {
+        m_dlssJitterX = cb.jitterX = 0.0f;
+        m_dlssJitterY = cb.jitterY = 0.0f;
+    }
 
     // 업로드 버퍼에 직접 기록
     void* mapped = nullptr;
@@ -741,6 +788,25 @@ void App::OnKeyDown(uint32_t key)
         m_cameraMoved           = true;
         m_accumDirty            = true;  // 디노이저 상태 변화 → 누적 버퍼 클리어 필요
         std::println("[App] 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
+    }
+    else if (key == 'U')
+    {
+        if (m_dlss.IsAvailable())
+        {
+            m_dlssEnabled    = !m_dlssEnabled;
+            m_dlssFrameIdx   = 0;
+            m_frameCount     = 0;
+            m_cameraMoved    = true;
+            m_accumDirty     = true;
+            std::println("[App] DLSS {} ({}x{} → {}x{})",
+                         m_dlssEnabled ? "ON" : "OFF",
+                         m_dlss.RenderWidth(), m_dlss.RenderHeight(),
+                         m_width, m_height);
+        }
+        else
+        {
+            std::println("[App] DLSS 미지원 GPU");
+        }
     }
 }
 
@@ -795,40 +861,65 @@ void App::OnRender()
     }
 
     cmd->SetComputeRootSignature(m_globalRS.Get());
-
-    // 파라미터 0: 디스크립터 테이블 (힙 슬롯 0부터 - UAV + SRVs)
-    cmd->SetComputeRootDescriptorTable(0, m_core.CbvSrvUavHeap().GetHandle(0).gpu);
-
-    // 파라미터 1: 인라인 루트 CBV (씬 상수 버퍼)
     cmd->SetComputeRootConstantBufferView(1, m_sceneCB->GetGPUVirtualAddress());
-
-    // RTPSO 설정 및 레이 디스패치
     cmd->SetPipelineState1(m_pipeline.PSO());
 
     const auto& st = m_pipeline.GetShaderTable();
-    D3D12_DISPATCH_RAYS_DESC dispatchDesc{};
-    dispatchDesc.RayGenerationShaderRecord = st.RayGenRange();
-    dispatchDesc.MissShaderTable           = st.MissRange();
-    dispatchDesc.HitGroupTable             = st.HitGroupRange();
-    dispatchDesc.Width                     = m_width;
-    dispatchDesc.Height                    = m_height;
-    dispatchDesc.Depth                     = 1;
 
-    cmd->DispatchRays(&dispatchDesc);
-
-    // UAV 쓰기 완료 보장 (g_output + g_accumulation 모두 배리어)
-    m_renderTarget.UAVBarriers(cmd);
-
-    // 디노이저가 활성화된 경우: g_accumulation → (A-trous 3패스) → g_output 덮어쓰기
-    if (m_denoiseEnabled)
+    if (m_dlssEnabled && m_dlss.IsAvailable())
     {
-        m_denoiser.Apply(cmd,
-                         m_renderTarget.AccumResource(),
-                         m_renderTarget.Resource());
-    }
+        // ── DLSS 경로 ─────────────────────────────────────────────
+        // 디스크립터 테이블 베이스를 힙 슬롯 7 로 (render-res UAV + SRV 미러)
+        cmd->SetComputeRootDescriptorTable(0,
+            m_core.CbvSrvUavHeap().GetHandle(7).gpu);
 
-    // 결과를 백버퍼로 복사 후 Present
-    m_renderTarget.CopyToBackBuffer(cmd, m_core.BackBuffer());
+        D3D12_DISPATCH_RAYS_DESC dr{};
+        dr.RayGenerationShaderRecord = st.RayGenRange();
+        dr.MissShaderTable           = st.MissRange();
+        dr.HitGroupTable             = st.HitGroupRange();
+        dr.Width                     = m_dlss.RenderWidth();
+        dr.Height                    = m_dlss.RenderHeight();
+        dr.Depth                     = 1;
+        cmd->DispatchRays(&dr);
+
+        m_dlss.UAVBarriers(cmd);
+
+        // DLSS 업스케일: render-res → display-res
+        // m_dlssJitterX/Y 는 UpdateSceneCB 에서 이미 계산된 값
+        bool resetDlss = m_accumDirty;
+        m_accumDirty   = false;
+        m_dlss.Evaluate(cmd, m_dlssJitterX, m_dlssJitterY, resetDlss);
+
+        ++m_dlssFrameIdx;
+
+        m_dlss.CopyOutputToBackBuffer(cmd, m_core.BackBuffer());
+    }
+    else
+    {
+        // ── 일반 경로 (누적 + A-trous 디노이저) ───────────────────
+        cmd->SetComputeRootDescriptorTable(0,
+            m_core.CbvSrvUavHeap().GetHandle(0).gpu);
+
+        D3D12_DISPATCH_RAYS_DESC dr{};
+        dr.RayGenerationShaderRecord = st.RayGenRange();
+        dr.MissShaderTable           = st.MissRange();
+        dr.HitGroupTable             = st.HitGroupRange();
+        dr.Width                     = m_width;
+        dr.Height                    = m_height;
+        dr.Depth                     = 1;
+        cmd->DispatchRays(&dr);
+
+        m_renderTarget.UAVBarriers(cmd);
+
+        if (m_denoiseEnabled)
+        {
+            m_denoiser.Apply(cmd,
+                             m_renderTarget.AccumResource(),
+                             m_renderTarget.Resource());
+        }
+
+        m_renderTarget.CopyToBackBuffer(cmd, m_core.BackBuffer());
+    }
 
     m_core.EndFrame(m_smoothFps, m_denoiseEnabled);
 }

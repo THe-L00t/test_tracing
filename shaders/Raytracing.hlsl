@@ -47,8 +47,8 @@ cbuffer SceneConstants : register(b0)
     float4 matMetallic;             // .xyzw = metallic per mat
     float4 matEmissive;             // .xyzw = emissive signal
 
-    uint   frameCount;  uint   randomSeed;  float  emissBoxHalfSize; float _cbPad1;
-    float3 emissBoxCenter;  float _cbPad2;
+    uint   frameCount;  uint   randomSeed;  float  emissBoxHalfSize; float jitterX;
+    float3 emissBoxCenter;  float jitterY;
 }
 
 // ── 상수 ────────────────────────────────────────────────────────
@@ -399,9 +399,10 @@ void RayGen()
 
     uint seed = WangHash(idx.x + idx.y * dim.x + randomSeed * 719393u);
 
-    // 서브픽셀 지터 (안티에일리어싱)
-    float2 jitter = float2(RandFloat(seed), RandFloat(seed)) - 0.5f;
-    float2 uv     = ((float2)idx + 0.5f + jitter) / (float2)dim;
+    // DLSS Halton 지터 (CPU에서 전달, 비DLSS 시 0) + MC 서브픽셀 지터
+    float2 dlssJ = float2(jitterX, jitterY);
+    float2 aaJ   = float2(RandFloat(seed), RandFloat(seed)) - 0.5f;
+    float2 uv    = ((float2)idx + 0.5f + dlssJ + aaJ) / (float2)dim;
     float2 ndc    = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
 
     float3 dir = normalize(
