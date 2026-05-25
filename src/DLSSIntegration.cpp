@@ -177,7 +177,9 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     cp.Feature.InTargetWidth     = displayW;
     cp.Feature.InTargetHeight    = displayH;
     cp.Feature.InPerfQualityValue = NVSDK_NGX_PerfQuality_Value_MaxPerf;
-    cp.InFeatureCreateFlags      = 0;  // LDR (RGBA8 톤맵 완료 입력)
+    // MVLowRes: MV 텍스처가 render 해상도 — 이 플래그 없으면 DLSS가 display 해상도로 샘플링해
+    // render-res 영역 밖에서 엣지 클램핑 → 3/4 화면 temporal reprojection 실패
+    cp.InFeatureCreateFlags      = NVSDK_NGX_DLSS_Feature_Flags_MVLowRes;
 
     res = NGX_D3D12_CREATE_DLSS_EXT(cmdList, 1, 1, &m_feature, m_params, &cp);
     if (NVSDK_NGX_FAILED(res))
@@ -219,12 +221,16 @@ void DLSSIntegration::RefreshTLASSRV(ID3D12Device* device,
 // ── UAVBarriers ───────────────────────────────────────────────────
 void DLSSIntegration::UAVBarriers(ID3D12GraphicsCommandList* cmdList)
 {
-    D3D12_RESOURCE_BARRIER barriers[2]{};
+    D3D12_RESOURCE_BARRIER barriers[4]{};
     barriers[0].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barriers[0].UAV.pResource = m_renderColor.Get();
     barriers[1].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barriers[1].UAV.pResource = m_renderAccum.Get();
-    cmdList->ResourceBarrier(2, barriers);
+    barriers[2].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barriers[2].UAV.pResource = m_depth.Get();
+    barriers[3].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barriers[3].UAV.pResource = m_motionVec.Get();
+    cmdList->ResourceBarrier(4, barriers);
 }
 
 // ── Evaluate ──────────────────────────────────────────────────────
@@ -266,7 +272,9 @@ void DLSSIntegration::Evaluate(ID3D12GraphicsCommandList* cmdList,
     ep.InReset                   = reset ? 1 : 0;
     ep.InMVScaleX                = 1.0f;  // MV는 렌더 해상도 픽셀 단위 → scale=1.0 그대로
     ep.InMVScaleY                = 1.0f;
-    ep.InRenderSubrectDimensions = { m_renderW, m_renderH };
+    // InRenderSubrectDimensions = {0, 0}: 입력 버퍼가 정확히 render-res이므로
+    // 명시적 subrect 불필요 — DLSS가 피처 생성 시 InWidth/InHeight로 자동 결정
+    // (일부 SDK 버전에서 명시값이 출력 subrect 크기로 잘못 해석되어 1/4 화면 발생)
 
     NVSDK_NGX_Result res = NGX_D3D12_EVALUATE_DLSS_EXT(cmdList, m_feature, m_params, &ep);
     if (NVSDK_NGX_FAILED(res))
