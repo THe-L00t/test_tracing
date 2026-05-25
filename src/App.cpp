@@ -313,8 +313,8 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
                     m_sphereBLAS.VertexBuffer(), m_sphereBLAS.VertexCount()))
     {
         m_dlssEnabled = true;
-        // DLSS 전용 A-trous 디노이저 (render-res)
-        m_denoiserDLSS.Init(m_core.Device(), m_dlss.RenderWidth(), m_dlss.RenderHeight());
+        // DLSS 전용 SVGF 디노이저 (render-res, temporal+wavelet)
+        m_svgfDenoiserDLSS.Init(m_core.Device(), m_dlss.RenderWidth(), m_dlss.RenderHeight());
         std::println("[App] DLSS 기본 활성화 — U 키로 토글");
     }
     else
@@ -335,7 +335,7 @@ void App::Shutdown()
     m_core.FlushGPU();
     m_dlss.Shutdown(m_core.Device());
     m_denoiser.Shutdown();
-    m_denoiserDLSS.Shutdown();
+    m_svgfDenoiserDLSS.Shutdown();
     m_core.Shutdown();
 }
 
@@ -874,7 +874,7 @@ void App::OnKeyDown(uint32_t key)
         m_cameraMoved      = true;
         m_accumDirty       = true;
         if (m_dlssEnabled && m_dlss.IsAvailable())
-            std::println("[App] A-trous 디노이저 {} (DLSS 앞 render-res 적용)",
+            std::println("[App] SVGF 디노이저 {} (DLSS 앞 render-res 시간적+웨이블릿)",
                          m_denoiseEnabled ? "ON" : "OFF");
         else
             std::println("[App] A-trous 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
@@ -979,15 +979,17 @@ void App::OnRender()
         // RT 셰이더 쓰기 완료 보장 (renderColor, renderAccum, depth, motionVec, renderNormal)
         m_dlss.UAVBarriers(cmd);
 
-        // A-trous 공간 디노이저: render-res에서 DLSS 앞에 실행
-        // PT(1spp 노이즈) → A-trous(render-res 공간 필터) → DLSS(업스케일+시간 누적)
+        // SVGF 디노이저: render-res에서 DLSS 앞에 실행
+        // PT(1spp) → SVGF(temporal+wavelet, render-res) → DLSS(업스케일)
         if (m_denoiseEnabled)
         {
-            m_denoiserDLSS.Apply(cmd,
+            m_svgfDenoiserDLSS.Apply(cmd,
                 m_dlss.RenderAccumResource(),
                 m_dlss.RenderColorResource(),
                 m_dlss.DepthResource(),
-                m_dlss.NormalResource());
+                m_dlss.NormalResource(),
+                m_dlss.MotionVecResource(),
+                dlssReset);
 
             // 디노이저가 자체 힙을 바인딩하므로 메인 힙 복원
             ID3D12DescriptorHeap* heaps[] = { m_core.CbvSrvUavHeap().Get() };

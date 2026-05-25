@@ -6,6 +6,7 @@
 #include "AccelerationStructure.h"
 #include "RenderTarget.h"
 #include "Denoiser.h"
+#include "SVGFDenoiser.h"
 #include "DLSSIntegration.h"
 #include <chrono>
 
@@ -69,9 +70,9 @@ private:
     uint32_t m_height     = k_defaultHeight;
     bool     m_sceneBuilt = false;
 
-    // 디노이저 (비DLSS: display-res, DLSS: render-res)
-    Denoiser m_denoiser;
-    Denoiser m_denoiserDLSS;  // DLSS 경로 전용 (render-res)
+    // 디노이저 (비DLSS: display-res A-trous, DLSS: render-res SVGF)
+    Denoiser     m_denoiser;          // 비DLSS 경로 A-trous
+    SVGFDenoiser m_svgfDenoiserDLSS;  // DLSS 경로 전용 SVGF (render-res)
     bool     m_denoiseEnabled = false;
 
     // DLSS
