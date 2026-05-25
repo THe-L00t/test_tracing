@@ -3,6 +3,9 @@
 #include "nvsdk_ngx_helpers.h"
 #include "nvsdk_ngx_params_dlssd.h"
 #include <print>
+#include <filesystem>
+#include <string>
+#include <windows.h>
 
 // ── 텍스처 생성 헬퍼 ─────────────────────────────────────────────
 static ComPtr<ID3D12Resource> MakeUAVTex(ID3D12Device* dev,
@@ -54,22 +57,56 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     m_displayW = displayW;
     m_displayH = displayH;
 
-    // ── 1. NGX 초기화 ─────────────────────────────────────────────
-    NVSDK_NGX_Result res = NVSDK_NGX_D3D12_Init(0x534C5344 /*'DLSS'*/, L".", device);
+    // ── 1. NGX 초기화 (EXE 디렉터리를 DLL 검색 경로로 명시) ───────
+    // CWD가 EXE 디렉터리와 다를 수 있어 (VS 디버그시 $(ProjectDir)) 명시적으로 전달
+    wchar_t exePath[MAX_PATH];
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring exeDir(exePath);
+    size_t slash = exeDir.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) exeDir = exeDir.substr(0, slash);
+    std::println("[DLSS] EXE 디렉터리: {}",
+                 std::filesystem::path(exeDir).string());
+
+    const wchar_t* searchPaths[] = { exeDir.c_str() };
+    NVSDK_NGX_FeatureCommonInfo featureInfo{};
+    featureInfo.PathListInfo.Path   = searchPaths;
+    featureInfo.PathListInfo.Length = 1;
+
+    NVSDK_NGX_Result res = NVSDK_NGX_D3D12_Init(0x534C5344 /*'DLSS'*/, exeDir.c_str(),
+                                                 device, &featureInfo, NVSDK_NGX_Version_API);
     if (NVSDK_NGX_FAILED(res))
     {
-        std::println("[DLSS] NGX 초기화 실패 (비-NVIDIA GPU 또는 구형 드라이버): 0x{:08X}",
+        std::println("[DLSS] NGX_D3D12_Init 실패: 0x{:08X} (비-NVIDIA GPU 또는 구형 드라이버)",
                      static_cast<uint32_t>(res));
         return false;
     }
+    std::println("[DLSS] NGX_D3D12_Init OK");
 
     res = NVSDK_NGX_D3D12_GetCapabilityParameters(&m_params);
     if (NVSDK_NGX_FAILED(res))
     {
-        std::println("[DLSS] GetCapabilityParameters 실패: 0x{:08X}",
-                     static_cast<uint32_t>(res));
+        std::println("[DLSS] GetCapabilityParameters 실패: 0x{:08X}", static_cast<uint32_t>(res));
         NVSDK_NGX_D3D12_Shutdown1(device);
         return false;
+    }
+
+    // ── 1.5. 기능별 가용성 진단 출력 ──────────────────────────────
+    int srAvail = 0, rrAvail = 0;
+    int srNeedsUpdate = 0, rrNeedsUpdate = 0;
+    int srInitResult  = 0, rrInitResult  = 0;
+    NVSDK_NGX_Parameter_GetI(m_params, NVSDK_NGX_Parameter_SuperSampling_Available,          &srAvail);
+    NVSDK_NGX_Parameter_GetI(m_params, NVSDK_NGX_Parameter_SuperSamplingDenoising_Available, &rrAvail);
+    NVSDK_NGX_Parameter_GetI(m_params, NVSDK_NGX_Parameter_SuperSampling_NeedsUpdatedDriver,          &srNeedsUpdate);
+    NVSDK_NGX_Parameter_GetI(m_params, NVSDK_NGX_Parameter_SuperSamplingDenoising_NeedsUpdatedDriver, &rrNeedsUpdate);
+    NVSDK_NGX_Parameter_GetI(m_params, NVSDK_NGX_Parameter_SuperSampling_FeatureInitResult,          &srInitResult);
+    NVSDK_NGX_Parameter_GetI(m_params, NVSDK_NGX_Parameter_SuperSamplingDenoising_FeatureInitResult, &rrInitResult);
+    std::println("[DLSS] 진단: SR(avail={}, needsDrv={}, init=0x{:08X}) RR(avail={}, needsDrv={}, init=0x{:08X})",
+                 srAvail, srNeedsUpdate, (uint32_t)srInitResult,
+                 rrAvail, rrNeedsUpdate, (uint32_t)rrInitResult);
+    if (rrAvail == 0)
+    {
+        std::println("[DLSS-RR] RR Available=0: 드라이버가 너무 구버전이거나 GPU가 RR을 지원하지 않음");
+        std::println("[DLSS-RR] 요구사항: RTX 20xx 이상 + 드라이버 537.58+ (DLSS 3.5 출시)");
     }
 
     // ── 2. 렌더 해상도 쿼리 (Performance 모드 ≈ 50%) ─────────────
@@ -81,8 +118,8 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
 
     if (NVSDK_NGX_FAILED(res) || optW == 0 || optH == 0)
     {
-        // DLSS 미지원 GPU (AMD, Intel, 구형 NVIDIA)
-        std::println("[DLSS] DLSS 미지원: 최적 해상도 쿼리 실패");
+        std::println("[DLSS] OPTIMAL_SETTINGS 실패: 0x{:08X}, optW={} optH={}",
+                     static_cast<uint32_t>(res), optW, optH);
         NVSDK_NGX_D3D12_DestroyParameters(m_params);
         m_params = nullptr;
         NVSDK_NGX_D3D12_Shutdown1(device);
@@ -184,11 +221,6 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     // ── 5. DLSS Ray Reconstruction 피처 생성 (RR 전용, 폴백 없음) ──
     // 입력: raw 1spp HDR (m_renderAccum RGBA32F) + depth + MV + normals
     // RR은 AI 모델이 denoising + temporal + upscaling을 1패스로 처리
-    int rrAvailable = 0;
-    NVSDK_NGX_Parameter_GetI(m_params, NVSDK_NGX_Parameter_SuperSamplingDenoising_Available, &rrAvailable);
-    if (!rrAvailable)
-        std::println("[DLSS-RR] WARNING: Available 플래그 0 — DLL이 로드되지 않으면 CreateFeature 실패");
-
     NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_CreationNodeMask,    1);
     NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_VisibilityNodeMask,  1);
     NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_Width,               m_renderW);
