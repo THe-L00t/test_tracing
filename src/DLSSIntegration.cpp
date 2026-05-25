@@ -272,9 +272,7 @@ void DLSSIntegration::Evaluate(ID3D12GraphicsCommandList* cmdList,
     ep.InReset                   = reset ? 1 : 0;
     ep.InMVScaleX                = 1.0f;  // MV는 렌더 해상도 픽셀 단위 → scale=1.0 그대로
     ep.InMVScaleY                = 1.0f;
-    // InRenderSubrectDimensions = {0, 0}: 입력 버퍼가 정확히 render-res이므로
-    // 명시적 subrect 불필요 — DLSS가 피처 생성 시 InWidth/InHeight로 자동 결정
-    // (일부 SDK 버전에서 명시값이 출력 subrect 크기로 잘못 해석되어 1/4 화면 발생)
+    ep.InRenderSubrectDimensions = { m_renderW, m_renderH };  // 입력 subrect = render-res 전체
 
     NVSDK_NGX_Result res = NGX_D3D12_EVALUATE_DLSS_EXT(cmdList, m_feature, m_params, &ep);
     if (NVSDK_NGX_FAILED(res))
