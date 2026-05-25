@@ -313,7 +313,7 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
                     m_sphereBLAS.VertexBuffer(), m_sphereBLAS.VertexCount()))
     {
         m_dlssEnabled = true;
-        std::println("[App] DLSS-RR 기본 활성화 — U 키로 토글");
+        std::println("[App] DLSS 기본 활성화 — U 키로 토글");
     }
     else
     {
@@ -871,7 +871,7 @@ void App::OnKeyDown(uint32_t key)
         m_cameraMoved      = true;
         m_accumDirty       = true;
         if (m_dlssEnabled && m_dlss.IsAvailable())
-            std::println("[App] DLSS-RR 모드: denoising은 RR 내부 AI 처리 (R키 무효)");
+            std::println("[App] DLSS 모드: denoiser는 DLSS 내부 처리 (R키 무효)");
         else
             std::println("[App] A-trous 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
     }
