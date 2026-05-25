@@ -9,18 +9,19 @@ struct NVSDK_NGX_Parameter;
 // ---------------------------------------------------------------
 // DLSS Super Resolution 통합 클래스
 //
-// 힙 슬롯 배치 (BuildDescriptors 완료 후 Init 호출 기준, 슬롯 0..8 선점 후):
-//   [9]  UAV m_renderColor  (RGBA8,   render res) ← RT shader u0
-//  [10]  UAV m_renderAccum  (RGBA32F, render res) ← RT shader u1
-//  [11]  UAV m_depth        (R32_FLOAT,   render res) ← RT shader u2
-//  [12]  UAV m_motionVec    (R16G16_FLOAT, render res) ← RT shader u3
-//  [13]  SRV TLAS 미러      ← t0
-//  [14]  SRV plane VB 미러  ← t1
-//  [15]  SRV cube VB 미러   ← t2
-//  [16]  SRV room VB 미러   ← t3
-//  [17]  SRV sphere VB 미러 ← t4
+// 힙 슬롯 배치 (BuildDescriptors 완료 후 Init 호출 기준, 슬롯 0..9 선점 후):
+//  [10]  UAV m_renderColor  (RGBA8,         render res) ← RT shader u0
+//  [11]  UAV m_renderAccum  (RGBA32F,        render res) ← RT shader u1
+//  [12]  UAV m_depth        (R32_FLOAT,      render res) ← RT shader u2
+//  [13]  UAV m_motionVec    (R16G16_FLOAT,   render res) ← RT shader u3
+//  [14]  UAV m_renderNormal (R16G16_FLOAT,   render res) ← RT shader u4 (oct-법선)
+//  [15]  SRV TLAS 미러      ← t0
+//  [16]  SRV plane VB 미러  ← t1
+//  [17]  SRV cube VB 미러   ← t2
+//  [18]  SRV room VB 미러   ← t3
+//  [19]  SRV sphere VB 미러 ← t4
 //
-// DLSS 모드 시 SetComputeRootDescriptorTable(0, heap[9]) 로
+// DLSS 모드 시 SetComputeRootDescriptorTable(0, heap[10]) 로
 // 기존 루트 시그니처를 그대로 재사용한다.
 // ---------------------------------------------------------------
 class DLSSIntegration
@@ -68,6 +69,7 @@ public:
     ID3D12Resource* RenderAccumResource() const noexcept { return m_renderAccum.Get(); }
     ID3D12Resource* DepthResource()       const noexcept { return m_depth.Get(); }
     ID3D12Resource* MotionVecResource()   const noexcept { return m_motionVec.Get(); }
+    ID3D12Resource* NormalResource()      const noexcept { return m_renderNormal.Get(); }
 
 private:
     NVSDK_NGX_Handle*    m_feature = nullptr;
@@ -77,9 +79,10 @@ private:
     ComPtr<ID3D12Resource> m_renderColor;  // RGBA8,   render res (u0)
     ComPtr<ID3D12Resource> m_renderAccum;  // RGBA32F, render res (u1)
 
-    // DLSS 보조 입력 (모두 0으로 유지 — 경로 추적기는 GBuffer 없음)
-    ComPtr<ID3D12Resource> m_depth;        // R32_FLOAT, render res
+    // DLSS 보조 입력 + A-trous 엣지 스토핑용 법선
+    ComPtr<ID3D12Resource> m_depth;        // R32_FLOAT,    render res
     ComPtr<ID3D12Resource> m_motionVec;    // R16G16_FLOAT, render res
+    ComPtr<ID3D12Resource> m_renderNormal; // R16G16_FLOAT, render res (oct-법선 u4)
 
     // DLSS 출력 (디스플레이 해상도, 백버퍼와 동일 포맷)
     ComPtr<ID3D12Resource> m_dlssOutput;

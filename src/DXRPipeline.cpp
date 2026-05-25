@@ -68,27 +68,28 @@ namespace
 
 // ---------------------------------------------------------------
 // 글로벌 루트 시그니처
-// 파라미터 0: 디스크립터 테이블 (UAV×4 at offset 0, SRV×5 at offset 4)
+// 파라미터 0: 디스크립터 테이블 (UAV×5 at offset 0, SRV×5 at offset 5)
 //   힙 슬롯 0: UAV u0 (g_output,       RGBA8     — 최종 색상)
 //   힙 슬롯 1: UAV u1 (g_accumulation, RGBA32F   — HDR 누적)
 //   힙 슬롯 2: UAV u2 (g_depth,        R32_FLOAT — NDC depth)
 //   힙 슬롯 3: UAV u3 (g_motionVec,    RG16F     — DLSS MV / 비DLSS oct-법선)
-//   힙 슬롯 4: SRV t0 (TLAS)
-//   힙 슬롯 5: SRV t1 (plane VB)
-//   힙 슬롯 6: SRV t2 (cube VB)
-//   힙 슬롯 7: SRV t3 (room VB)
-//   힙 슬롯 8: SRV t4 (sphere VB)
+//   힙 슬롯 4: UAV u4 (g_normals,      RG16F     — oct-법선 항상 기록, A-trous 공용)
+//   힙 슬롯 5: SRV t0 (TLAS)
+//   힙 슬롯 6: SRV t1 (plane VB)
+//   힙 슬롯 7: SRV t2 (cube VB)
+//   힙 슬롯 8: SRV t3 (room VB)
+//   힙 슬롯 9: SRV t4 (sphere VB)
 // 파라미터 1: 인라인 루트 CBV b0 (씬 상수)
 // ---------------------------------------------------------------
 ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
 {
     // 파라미터 0: 디스크립터 테이블
-    //   Range 0: UAV 2개 (u0, u1) - 출력 + 누적 버퍼
-    //   Range 1: SRV 4개 (t0..t3) - TLAS + VB 3개
+    //   Range 0: UAV 5개 (u0..u4) - 출력+누적+depth+motionVec+normals
+    //   Range 1: SRV 5개 (t0..t4) - TLAS + VB 4개
     D3D12_DESCRIPTOR_RANGE1 ranges[2]{};
 
     ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    ranges[0].NumDescriptors                    = 4;   // u0(output)+u1(accum)+u2(depth)+u3(motionVec)
+    ranges[0].NumDescriptors                    = 5;   // u0-u4
     ranges[0].BaseShaderRegister                = 0;
     ranges[0].RegisterSpace                     = 0;
     ranges[0].OffsetInDescriptorsFromTableStart = 0;
@@ -98,7 +99,7 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[1].NumDescriptors                    = 5;   // t0(TLAS) + t1(plane) + t2(cube) + t3(room) + t4(sphere)
     ranges[1].BaseShaderRegister                = 0;
     ranges[1].RegisterSpace                     = 0;
-    ranges[1].OffsetInDescriptorsFromTableStart = 4;   // 힙 슬롯 4부터 (UAV 4개 다음)
+    ranges[1].OffsetInDescriptorsFromTableStart = 5;   // 힙 슬롯 5부터 (UAV 5개 다음)
     ranges[1].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     D3D12_ROOT_PARAMETER1 params[2]{};

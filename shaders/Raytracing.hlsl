@@ -24,7 +24,8 @@
 RWTexture2D<float4>             g_output       : register(u0);
 RWTexture2D<float4>             g_accumulation : register(u1);
 RWTexture2D<float>              g_depth        : register(u2); // NDC depth [0..1] (DLSS용)
-RWTexture2D<float2>             g_motionVec    : register(u3); // 모션벡터 픽셀 단위 (DLSS용)
+RWTexture2D<float2>             g_motionVec    : register(u3); // 모션벡터 픽셀 단위 (DLSS용) / 비DLSS: oct-법선
+RWTexture2D<float2>             g_normals      : register(u4); // oct-법선 항상 기록 (A-trous 공용)
 RaytracingAccelerationStructure g_tlas         : register(t0);
 
 struct VertexPN { float3 pos; float3 normal; };
@@ -480,6 +481,9 @@ void RayGen()
             float ndcZ = saturate(farZ * (viewZ - nearZ) / (viewZ * (farZ - nearZ)));
             g_depth[idx] = ndcZ;  // 항상 기록 (DLSS + A-trous 공용)
 
+            // oct-법선: 항상 u4(g_normals)에 기록 — DLSS/비DLSS 구분 없이 A-trous가 읽음
+            g_normals[idx] = OctEncode(payload.hitNormal);
+
             if (isDLSSMode)
             {
                 // DLSS: 렌더 해상도 픽셀 단위 모션벡터
@@ -502,7 +506,7 @@ void RayGen()
             }
             else
             {
-                // 비DLSS: oct-인코딩된 월드 법선 기록 (A-trous 엣지 스토핑용)
+                // 비DLSS: oct-법선을 u3에도 기록 (A-trous 비DLSS 경로 backward compat)
                 g_motionVec[idx] = OctEncode(payload.hitNormal);
             }
         }

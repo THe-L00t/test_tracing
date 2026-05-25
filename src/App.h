@@ -69,8 +69,9 @@ private:
     uint32_t m_height     = k_defaultHeight;
     bool     m_sceneBuilt = false;
 
-    // 디노이저
+    // 디노이저 (비DLSS: display-res, DLSS: render-res)
     Denoiser m_denoiser;
+    Denoiser m_denoiserDLSS;  // DLSS 경로 전용 (render-res)
     bool     m_denoiseEnabled = false;
 
     // DLSS
