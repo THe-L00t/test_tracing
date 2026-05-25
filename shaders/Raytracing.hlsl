@@ -496,7 +496,7 @@ void RayGen()
                     float2 prevUV  = float2(prevNdcX * 0.5f + 0.5f,
                                             1.0f - (prevNdcY * 0.5f + 0.5f));
                     float2 currUV  = ((float2)idx + 0.5f) / (float2)dim;
-                    mv = (currUV - prevUV) * (float2)dim;
+                    mv = (prevUV - currUV) * (float2)dim;  // current→previous (DLSS 컨벤션)
                 }
                 g_motionVec[idx] = mv;
             }

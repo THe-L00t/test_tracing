@@ -264,8 +264,8 @@ void DLSSIntegration::Evaluate(ID3D12GraphicsCommandList* cmdList,
     ep.InJitterOffsetX           = jitterX;
     ep.InJitterOffsetY           = jitterY;
     ep.InReset                   = reset ? 1 : 0;
-    ep.InMVScaleX                = float(m_displayW) / float(m_renderW);  // 렌더→디스플레이 픽셀 스케일
-    ep.InMVScaleY                = float(m_displayH) / float(m_renderH);
+    ep.InMVScaleX                = 1.0f;  // MV는 렌더 해상도 픽셀 단위 → scale=1.0 그대로
+    ep.InMVScaleY                = 1.0f;
     ep.InRenderSubrectDimensions = { m_renderW, m_renderH };
 
     NVSDK_NGX_Result res = NGX_D3D12_EVALUATE_DLSS_EXT(cmdList, m_feature, m_params, &ep);
