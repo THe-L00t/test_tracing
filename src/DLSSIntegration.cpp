@@ -152,7 +152,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         srvDesc.RaytracingAccelerationStructure.Location = tlasGpuVA;
         device->CreateShaderResourceView(nullptr, &srvDesc, h.cpu);
     }
-    // 슬롯 10..13: SRV VB 미러 (plane, cube, room, sphere)
+    // 슬롯 14..17: SRV VB 미러 (plane, cube, room, sphere)
     auto makeVbSRV = [&](ID3D12Resource* vb, uint32_t cnt)
     {
         DescriptorHandle h = sharedHeap.Allocate();

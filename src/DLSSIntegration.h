@@ -9,16 +9,18 @@ struct NVSDK_NGX_Parameter;
 // ---------------------------------------------------------------
 // DLSS Super Resolution 통합 클래스
 //
-// 힙 슬롯 배치 (Init 후):
-//   [7]  UAV m_renderColor  (RGBA8,  render res) ← RT shader u0
-//   [8]  UAV m_renderAccum  (RGBA32F, render res) ← RT shader u1
-//   [9]  SRV TLAS 미러
-//  [10]  SRV plane VB 미러
-//  [11]  SRV cube VB 미러
-//  [12]  SRV room VB 미러
-//  [13]  SRV sphere VB 미러
+// 힙 슬롯 배치 (BuildDescriptors 완료 후 Init 호출 기준, 슬롯 0..8 선점 후):
+//   [9]  UAV m_renderColor  (RGBA8,   render res) ← RT shader u0
+//  [10]  UAV m_renderAccum  (RGBA32F, render res) ← RT shader u1
+//  [11]  UAV m_depth        (R32_FLOAT,   render res) ← RT shader u2
+//  [12]  UAV m_motionVec    (R16G16_FLOAT, render res) ← RT shader u3
+//  [13]  SRV TLAS 미러      ← t0
+//  [14]  SRV plane VB 미러  ← t1
+//  [15]  SRV cube VB 미러   ← t2
+//  [16]  SRV room VB 미러   ← t3
+//  [17]  SRV sphere VB 미러 ← t4
 //
-// DLSS 모드 시 SetComputeRootDescriptorTable(0, heap[7]) 로
+// DLSS 모드 시 SetComputeRootDescriptorTable(0, heap[9]) 로
 // 기존 루트 시그니처를 그대로 재사용한다.
 // ---------------------------------------------------------------
 class DLSSIntegration

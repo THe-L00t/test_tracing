@@ -75,7 +75,6 @@ private:
 
     // DLSS
     DLSSIntegration m_dlss;
-    Denoiser        m_dlssDenoiser;  // DLSS 입력 클리닝용 render-res 전용 디노이저
 
     // 이전 프레임 카메라 (모션벡터 계산용, UpdateSceneCB 끝에 갱신)
     float m_prevCamPos[3]     = {};

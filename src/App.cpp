@@ -313,9 +313,6 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
                     m_sphereBLAS.VertexBuffer(), m_sphereBLAS.VertexCount()))
     {
         m_dlssEnabled = true;
-        // DLSS 입력 품질 향상용: render-res 전용 A-trous 디노이저
-        m_dlssDenoiser.Init(m_core.Device(),
-                            m_dlss.RenderWidth(), m_dlss.RenderHeight());
         std::println("[App] DLSS 기본 활성화 — U 키로 토글");
     }
     else
@@ -335,7 +332,6 @@ void App::Shutdown()
 {
     m_core.FlushGPU();
     m_dlss.Shutdown(m_core.Device());
-    m_dlssDenoiser.Shutdown();
     m_denoiser.Shutdown();
     m_core.Shutdown();
 }
@@ -952,15 +948,6 @@ void App::OnRender()
 
         m_dlss.UAVBarriers(cmd);
 
-        // A-trous 디노이저로 render-res 노이즈 제거 후 DLSS에 입력
-        // (DLSS는 깨끗한 입력일수록 고스팅·블러 감소)
-        m_dlssDenoiser.Apply(cmd,
-                             m_dlss.RenderAccumResource(),
-                             m_dlss.RenderColorResource());
-
-        // 디노이저가 자체 힙을 바인딩하므로 메인 힙 복원
-        cmd->SetDescriptorHeaps(1, heaps);
-
         // DLSS 업스케일: render-res → display-res
         // m_dlssJitterX/Y 는 UpdateSceneCB 에서 이미 계산된 값
         m_dlss.Evaluate(cmd, m_dlssJitterX, m_dlssJitterY, dlssReset);
@@ -1004,5 +991,20 @@ void App::OnResize(uint32_t width, uint32_t height)
     if (width == m_width && height == m_height) return;
     m_width  = width;
     m_height = height;
-    std::println("[App] 리사이즈: {}x{}", width, height);
+
+    // DLSS 텍스처는 초기 해상도에 고정된다.
+    // 리사이즈 시 그대로 두면 render-res / display-res 불일치로 Evaluate가 잘못된
+    // 해상도 버퍼를 읽어 크래시 또는 아티팩트가 발생하므로 DLSS를 비활성화한다.
+    // (완전한 resize 지원은 FlushGPU → Shutdown → 힙 슬롯 9+ 재초기화 → Init 필요)
+    if (m_dlssEnabled)
+    {
+        m_dlssEnabled = false;
+        m_frameCount  = 0;
+        m_accumDirty  = true;
+        std::println("[App] 리사이즈 {}x{} — DLSS 비활성화 (재시작 시 복원)", width, height);
+    }
+    else
+    {
+        std::println("[App] 리사이즈: {}x{}", width, height);
+    }
 }

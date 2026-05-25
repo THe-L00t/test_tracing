@@ -408,10 +408,15 @@ void RayGen()
 
     uint seed = WangHash(idx.x + idx.y * dim.x + randomSeed * 719393u);
 
-    // DLSS Halton 지터 (CPU에서 전달, 비DLSS 시 0) + MC 서브픽셀 지터
     float2 dlssJ = float2(jitterX, jitterY);
-    float2 aaJ   = float2(RandFloat(seed), RandFloat(seed)) - 0.5f;
-    float2 uv    = ((float2)idx + 0.5f + dlssJ + aaJ) / (float2)dim;
+    // DLSS 모드: Halton 지터만 사용.
+    // aaJ를 더하면 실제 레이 위치가 DLSS에 전달한 jitter와 달라져
+    // depth·motion 불일치 → 고스팅·시간적 누적 오류가 발생한다.
+    // 비DLSS 모드: dlssJ=(0,0)이므로 aaJ만 유효.
+    float2 aaJ = float2(0.0f, 0.0f);
+    if (!isDLSSMode)
+        aaJ = float2(RandFloat(seed), RandFloat(seed)) - 0.5f;
+    float2 uv = ((float2)idx + 0.5f + dlssJ + aaJ) / (float2)dim;
     float2 ndc    = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
 
     float3 dir = normalize(
