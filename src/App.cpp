@@ -358,8 +358,8 @@ void App::BuildBLASes()
 // 디스크립터 힙 구성 (일반 모드)
 // 슬롯 0: UAV u0 (g_output,       RGBA8   – RenderTarget::Init 내부)
 // 슬롯 1: UAV u1 (g_accumulation, RGBA32F – RenderTarget::Init 내부)
-// 슬롯 2: UAV u2 (더미 depth,     R32_FLOAT  1×1 – 일반 모드 자리채움)
-// 슬롯 3: UAV u3 (더미 motionVec, R16G16F    1×1 – 일반 모드 자리채움)
+// 슬롯 2: UAV u2 (g_depth,        R32_FLOAT  full-res — NDC depth)
+// 슬롯 3: UAV u3 (g_motionVec,    R16G16F    full-res — 비DLSS: oct-법선 / DLSS: 모션벡터)
 // 슬롯 4: SRV t0 (TLAS)
 // 슬롯 5: SRV t1 (plane VB)
 // 슬롯 6: SRV t2 (cube VB)
@@ -378,14 +378,13 @@ void App::BuildDescriptors()
     // 슬롯 0,1: UAV u0(g_output), u1(g_accumulation)
     m_renderTarget.Init(device, heap, m_width, m_height);
 
-    // 슬롯 2,3: 더미 UAV (u2=depth, u3=motionVec, 일반 모드에서 셰이더가 isDLSSMode=0으로 건너뜀)
-    // 루트 시그니처가 u0..u3를 선언하므로 유효한 디스크립터가 필요
-    auto makeUAVTex1x1 = [&](DXGI_FORMAT fmt) -> ComPtr<ID3D12Resource>
+    // 슬롯 2,3: G-Buffer UAV (full-res) — RT 셰이더가 항상 기록, A-trous 디노이저가 읽음
+    auto makeUAVTexFull = [&](DXGI_FORMAT fmt, uint32_t w, uint32_t h) -> ComPtr<ID3D12Resource>
     {
         D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd{};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        rd.Width = 1; rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Width = w; rd.Height = h; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
         rd.Format = fmt; rd.SampleDesc = {1, 0};
         rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags  = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
@@ -394,20 +393,22 @@ void App::BuildDescriptors()
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&res)));
         return res;
     };
-    if (!m_dummyDepthTex)  m_dummyDepthTex  = makeUAVTex1x1(DXGI_FORMAT_R32_FLOAT);
-    if (!m_dummyMotionTex) m_dummyMotionTex = makeUAVTex1x1(DXGI_FORMAT_R16G16_FLOAT);
+    if (!m_gbufferDepth)  m_gbufferDepth  = makeUAVTexFull(DXGI_FORMAT_R32_FLOAT,     m_width, m_height);
+    if (!m_gbufferNormal) m_gbufferNormal = makeUAVTexFull(DXGI_FORMAT_R16G16_FLOAT,  m_width, m_height);
+    m_gbufferDepth ->SetName(L"GBuffer_Depth");
+    m_gbufferNormal->SetName(L"GBuffer_Normal");
 
     {
         DescriptorHandle h = heap.Allocate();  // slot 2
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         uav.Format = DXGI_FORMAT_R32_FLOAT;
-        device->CreateUnorderedAccessView(m_dummyDepthTex.Get(), nullptr, &uav, h.cpu);
+        device->CreateUnorderedAccessView(m_gbufferDepth.Get(), nullptr, &uav, h.cpu);
     }
     {
         DescriptorHandle h = heap.Allocate();  // slot 3
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         uav.Format = DXGI_FORMAT_R16G16_FLOAT;
-        device->CreateUnorderedAccessView(m_dummyMotionTex.Get(), nullptr, &uav, h.cpu);
+        device->CreateUnorderedAccessView(m_gbufferNormal.Get(), nullptr, &uav, h.cpu);
     }
 
     // 슬롯 4: SRV (TLAS)  ← 슬롯 0..3은 UAV
@@ -572,6 +573,20 @@ void App::SwitchScene(uint32_t id)
 
         m_tlas.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ instances });
+    }
+
+    // 씬 전환 후 이전 카메라를 현재 카메라로 초기화 — 첫 프레임 쓰레기 MV 방지
+    {
+        const float* pos     = m_camera.Pos();
+        const float* right   = m_camera.Right();
+        const float* up      = m_camera.Up();
+        const float* forward = m_camera.Forward();
+        std::memcpy(m_prevCamPos,     pos,     sizeof(float) * 3);
+        std::memcpy(m_prevCamRight,   right,   sizeof(float) * 3);
+        std::memcpy(m_prevCamUp,      up,      sizeof(float) * 3);
+        std::memcpy(m_prevCamForward, forward, sizeof(float) * 3);
+        m_prevTanHalfFovY = 0.57735f;
+        m_prevAspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
     }
 
     m_core.SubmitAndFlush();
@@ -843,12 +858,17 @@ void App::OnKeyDown(uint32_t key)
     else if (key == '3') SwitchScene(2);
     else if (key == 'R')
     {
+        if (m_dlssEnabled && m_dlss.IsAvailable())
+        {
+            std::println("[App] DLSS 활성 중 A-trous 불가 — U키로 DLSS 먼저 해제하세요");
+            return;
+        }
         m_denoiseEnabled        = !m_denoiseEnabled;
         m_denoiser.enabled      = m_denoiseEnabled;
-        m_frameCount            = 0;  // 누적 초기화 (노이즈 기준이 달라지므로)
+        m_frameCount            = 0;
         m_cameraMoved           = true;
-        m_accumDirty            = true;  // 디노이저 상태 변화 → 누적 버퍼 클리어 필요
-        std::println("[App] 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
+        m_accumDirty            = true;
+        std::println("[App] A-trous 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
     }
     else if (key == 'U')
     {
@@ -859,6 +879,12 @@ void App::OnKeyDown(uint32_t key)
             m_frameCount     = 0;
             m_cameraMoved    = true;
             m_accumDirty     = true;
+            if (m_dlssEnabled && m_denoiseEnabled)
+            {
+                m_denoiseEnabled  = false;
+                m_denoiser.enabled = false;
+                std::println("[App] DLSS ON — A-trous 자동 비활성화 (상호 배제)");
+            }
             std::println("[App] DLSS {} ({}x{} → {}x{})",
                          m_dlssEnabled ? "ON" : "OFF",
                          m_dlss.RenderWidth(), m_dlss.RenderHeight(),
@@ -973,11 +999,23 @@ void App::OnRender()
 
         m_renderTarget.UAVBarriers(cmd);
 
+        // G-Buffer depth/normal UAV 배리어 (RT 셰이더 쓰기 완료 보장)
+        {
+            D3D12_RESOURCE_BARRIER gbBarriers[2]{};
+            gbBarriers[0].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            gbBarriers[0].UAV.pResource = m_gbufferDepth.Get();
+            gbBarriers[1].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            gbBarriers[1].UAV.pResource = m_gbufferNormal.Get();
+            cmd->ResourceBarrier(2, gbBarriers);
+        }
+
         if (m_denoiseEnabled)
         {
             m_denoiser.Apply(cmd,
                              m_renderTarget.AccumResource(),
-                             m_renderTarget.Resource());
+                             m_renderTarget.Resource(),
+                             m_gbufferDepth.Get(),
+                             m_gbufferNormal.Get());
         }
 
         m_renderTarget.CopyToBackBuffer(cmd, m_core.BackBuffer());

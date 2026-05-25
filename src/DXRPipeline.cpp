@@ -68,14 +68,16 @@ namespace
 
 // ---------------------------------------------------------------
 // 글로벌 루트 시그니처
-// 파라미터 0: 디스크립터 테이블
-//   힙 슬롯 0: UAV u0 (g_output,       RGBA8)
-//   힙 슬롯 1: UAV u1 (g_accumulation, RGBA32F)
-//   힙 슬롯 2: SRV t0 (TLAS)
-//   힙 슬롯 3: SRV t1 (plane VB)
-//   힙 슬롯 4: SRV t2 (cube VB)
-//   힙 슬롯 5: SRV t3 (room VB)
-//   힙 슬롯 6: SRV t4 (sphere VB)
+// 파라미터 0: 디스크립터 테이블 (UAV×4 at offset 0, SRV×5 at offset 4)
+//   힙 슬롯 0: UAV u0 (g_output,       RGBA8     — 최종 색상)
+//   힙 슬롯 1: UAV u1 (g_accumulation, RGBA32F   — HDR 누적)
+//   힙 슬롯 2: UAV u2 (g_depth,        R32_FLOAT — NDC depth)
+//   힙 슬롯 3: UAV u3 (g_motionVec,    RG16F     — DLSS MV / 비DLSS oct-법선)
+//   힙 슬롯 4: SRV t0 (TLAS)
+//   힙 슬롯 5: SRV t1 (plane VB)
+//   힙 슬롯 6: SRV t2 (cube VB)
+//   힙 슬롯 7: SRV t3 (room VB)
+//   힙 슬롯 8: SRV t4 (sphere VB)
 // 파라미터 1: 인라인 루트 CBV b0 (씬 상수)
 // ---------------------------------------------------------------
 ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
@@ -160,7 +162,7 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
     //    RayPayload: float3×4 + float(scatterPdf) + uint×3 = 48+4+12 = 64 bytes
     //    ShadowPayload: float = 4 bytes
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig{};
-    shaderConfig.MaxPayloadSizeInBytes   = 68;  // RayPayload 크기 (hitDist 추가로 68)
+    shaderConfig.MaxPayloadSizeInBytes   = 80;  // RayPayload 크기 (hitNormal float3 추가로 80)
     shaderConfig.MaxAttributeSizeInBytes = sizeof(float) * 2;  // 배리센트릭
 
     // 4. 파이프라인 설정

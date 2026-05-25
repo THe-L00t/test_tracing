@@ -76,7 +76,8 @@ struct RayPayload
     uint   seed;
     uint   depth;
     uint   terminated;
-    float  hitDist;         // 1차 히트 거리 (DLSS depth/motion 계산용, depth==0일 때만 유효)
+    float  hitDist;         // 1차 히트 거리 (depth/motion 계산용, depth==0일 때만 유효)
+    float3 hitNormal;       // 1차 히트 월드 법선 (A-trous 엣지 스토핑용, depth==0일 때만 유효)
 };
 
 struct ShadowPayload { float vis; };
@@ -95,6 +96,16 @@ float RandFloat(inout uint s)
 {
     s = WangHash(s);
     return float(s & 0x00FFFFFFu) / float(0x01000000u);
+}
+
+// ── Oct-인코딩 (월드 법선 → float2 [-1,1]^2) ────────────────────
+float2 OctEncode(float3 n)
+{
+    float3 o = n / (abs(n.x) + abs(n.y) + abs(n.z) + 1e-8f);
+    float2 r;
+    r.x = (o.z < 0.0f) ? ((1.0f - abs(o.y)) * (o.x >= 0.0f ? 1.0f : -1.0f)) : o.x;
+    r.y = (o.z < 0.0f) ? ((1.0f - abs(o.x)) * (o.y >= 0.0f ? 1.0f : -1.0f)) : o.y;
+    return r;
 }
 
 // ── ONB (법선 기반 접선 공간) ────────────────────────────────────
@@ -446,38 +457,54 @@ void RayGen()
         payload.depth         = bounce;
         payload.terminated    = 0u;
         payload.hitDist       = ray.TMax;
+        payload.hitNormal     = float3(0.0f, 1.0f, 0.0f);  // 미스 시 기본값 (up)
 
         TraceRay(g_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
 
         seed = payload.seed;
         radiance += throughput * payload.emission;
 
-        // 1차 히트에서 DLSS용 depth/motionVec 출력
-        if (bounce == 0u && isDLSSMode)
+        // 1차 히트: depth 항상 기록, motion(DLSS) 또는 oct-normal(비DLSS) 기록
+        if (bounce == 0u)
         {
             float t = payload.hitDist;
-            // NDC depth [0..1] (D3D12 컨벤션: near=0, far=1)
+            // 뷰 공간 Z: 레이 방향과 광축(camForward) 사이 코사인 보정
+            // unnorm 길이의 역수 = cos(시야각) → viewZ = t / length(unnorm)
+            float2 pxUV  = ((float2)idx + 0.5f) / (float2)dim;
+            float2 pxNDC = float2(pxUV.x * 2.0f - 1.0f, 1.0f - pxUV.y * 2.0f);
+            float3 unnorm = camForward
+                          + camRight * (pxNDC.x * aspectRatio * tanHalfFovY)
+                          + camUp    * (pxNDC.y * tanHalfFovY);
+            float viewZ = t / length(unnorm);  // view-space Z (cos(θ) 보정)
             const float nearZ = 0.1f, farZ = 1000.0f;
-            float ndcZ = saturate(farZ * (t - nearZ) / (t * (farZ - nearZ)));
-            g_depth[idx] = ndcZ;
+            float ndcZ = saturate(farZ * (viewZ - nearZ) / (viewZ * (farZ - nearZ)));
+            g_depth[idx] = ndcZ;  // 항상 기록 (DLSS + A-trous 공용)
 
-            // 히트 월드 좌표 → 이전 카메라 재투영 → 픽셀 단위 모션벡터
-            float3 hitW   = ray.Origin + ray.Direction * t;
-            float3 pLocal = hitW - prevCamPos;
-            float  pz     = dot(pLocal, prevCamForward);
-            float2 mv     = float2(0.0f, 0.0f);
-            if (pz > 0.001f)
+            if (isDLSSMode)
             {
-                float px = dot(pLocal, prevCamRight);
-                float py = dot(pLocal, prevCamUp);
-                float prevNdcX = px / (pz * prevAspectRatio  * prevTanHalfFovY);
-                float prevNdcY = py / (pz * prevTanHalfFovY);
-                float2 prevUV  = float2(prevNdcX * 0.5f + 0.5f,
-                                        1.0f - (prevNdcY * 0.5f + 0.5f));
-                float2 currUV  = ((float2)idx + 0.5f) / (float2)dim;
-                mv = (currUV - prevUV) * (float2)dim;  // 렌더 해상도 픽셀 단위
+                // DLSS: 렌더 해상도 픽셀 단위 모션벡터
+                float3 hitW   = ray.Origin + ray.Direction * t;
+                float3 pLocal = hitW - prevCamPos;
+                float  pz     = dot(pLocal, prevCamForward);
+                float2 mv     = float2(0.0f, 0.0f);
+                if (pz > 0.001f)
+                {
+                    float px = dot(pLocal, prevCamRight);
+                    float py = dot(pLocal, prevCamUp);
+                    float prevNdcX = px / (pz * prevAspectRatio  * prevTanHalfFovY);
+                    float prevNdcY = py / (pz * prevTanHalfFovY);
+                    float2 prevUV  = float2(prevNdcX * 0.5f + 0.5f,
+                                            1.0f - (prevNdcY * 0.5f + 0.5f));
+                    float2 currUV  = ((float2)idx + 0.5f) / (float2)dim;
+                    mv = (currUV - prevUV) * (float2)dim;
+                }
+                g_motionVec[idx] = mv;
             }
-            g_motionVec[idx] = mv;
+            else
+            {
+                // 비DLSS: oct-인코딩된 월드 법선 기록 (A-trous 엣지 스토핑용)
+                g_motionVec[idx] = OctEncode(payload.hitNormal);
+            }
         }
 
         if (payload.terminated != 0u) break;
@@ -582,7 +609,10 @@ void ClosestHit(inout RayPayload payload,
     bool entering = dot(rawN, V) >= 0.0f;
 
     float3 hitPos    = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    if (payload.depth == 0u) payload.hitDist = RayTCurrent(); // DLSS depth용
+    if (payload.depth == 0u) {
+        payload.hitDist   = RayTCurrent();
+        payload.hitNormal = N;  // 뷰-향 보정 후 법선 (A-trous 엣지 스토핑용)
+    }
 
     float3 albedo    = matAlbedoRoughness[matIdx].xyz;
     float  metallic  = matMetallic[matIdx];

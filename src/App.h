@@ -84,9 +84,10 @@ private:
     float m_prevTanHalfFovY   = 0.57735f;
     float m_prevAspectRatio   = 16.0f / 9.0f;
 
-    // 일반 모드 u2/u3 용 더미 UAV 텍스처 (1×1, DLSS 미사용 시 바인딩)
-    ComPtr<ID3D12Resource> m_dummyDepthTex;
-    ComPtr<ID3D12Resource> m_dummyMotionTex;
+    // G-Buffer (full-res, 비DLSS 모드에서 RT 셰이더가 씀 / A-trous 디노이저가 읽음)
+    // DLSS 모드에서는 m_dlss 내부 버퍼를 u2/u3에 바인딩하므로 이 버퍼는 비활성
+    ComPtr<ID3D12Resource> m_gbufferDepth;   // R32_FLOAT — NDC depth (u2)
+    ComPtr<ID3D12Resource> m_gbufferNormal;  // RG16_FLOAT — oct-인코딩 법선 (u3)
     bool            m_dlssEnabled    = false;
     uint32_t        m_dlssFrameIdx   = 0;    // Halton 시퀀스 인덱스
     float           m_dlssJitterX    = 0.0f; // 현재 프레임 Halton X (Evaluate에도 전달)
