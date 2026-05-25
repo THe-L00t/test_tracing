@@ -13,6 +13,7 @@ third_party/dlss/
     nvsdk_ngx_d_dbg.lib   Debug 빌드용 (동적 링크)
   bin/              런타임 DLL (.gitignore — 별도 다운로드 필요)
     nvngx_dlss.dll        DLSS Super Resolution 런타임
+    nvngx_dlssd.dll       DLSS Ray Reconstruction (RR) 런타임
 ```
 
 ## bin/ DLL 재다운로드 방법
@@ -23,6 +24,8 @@ third_party/dlss/
 ```powershell
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/NVIDIA/DLSS/main/lib/Windows_x86_64/rel/nvngx_dlss.dll" `
     -OutFile "third_party\dlss\bin\nvngx_dlss.dll" -UseBasicParsing
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/NVIDIA/DLSS/main/lib/Windows_x86_64/rel/nvngx_dlssd.dll" `
+    -OutFile "third_party\dlss\bin\nvngx_dlssd.dll" -UseBasicParsing
 ```
 
 ## 사용 방법 (D3D12)

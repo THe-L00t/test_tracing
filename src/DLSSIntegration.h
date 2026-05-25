@@ -93,5 +93,4 @@ private:
     uint32_t m_renderW  = 0, m_renderH  = 0;
     uint32_t m_displayW = 0, m_displayH = 0;
     bool     m_available = false;
-    bool     m_useRR     = false;  // true: DLSS Ray Reconstruction / false: DLSS SR (폴백)
 };
