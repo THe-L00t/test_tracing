@@ -313,9 +313,7 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
                     m_sphereBLAS.VertexBuffer(), m_sphereBLAS.VertexCount()))
     {
         m_dlssEnabled = true;
-        // DLSS 전용 SVGF 디노이저 (render-res, temporal+wavelet)
-        m_svgfDenoiserDLSS.Init(m_core.Device(), m_dlss.RenderWidth(), m_dlss.RenderHeight());
-        std::println("[App] DLSS 기본 활성화 — U 키로 토글");
+        std::println("[App] DLSS-RR 기본 활성화 — U 키로 토글");
     }
     else
     {
@@ -335,7 +333,6 @@ void App::Shutdown()
     m_core.FlushGPU();
     m_dlss.Shutdown(m_core.Device());
     m_denoiser.Shutdown();
-    m_svgfDenoiserDLSS.Shutdown();
     m_core.Shutdown();
 }
 
@@ -874,8 +871,7 @@ void App::OnKeyDown(uint32_t key)
         m_cameraMoved      = true;
         m_accumDirty       = true;
         if (m_dlssEnabled && m_dlss.IsAvailable())
-            std::println("[App] SVGF 디노이저 {} (DLSS 앞 render-res 시간적+웨이블릿)",
-                         m_denoiseEnabled ? "ON" : "OFF");
+            std::println("[App] DLSS-RR 모드: denoising은 RR 내부 AI 처리 (R키 무효)");
         else
             std::println("[App] A-trous 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
     }
@@ -979,22 +975,8 @@ void App::OnRender()
         // RT 셰이더 쓰기 완료 보장 (renderColor, renderAccum, depth, motionVec, renderNormal)
         m_dlss.UAVBarriers(cmd);
 
-        // 분산 유도 공간 디노이저: render-res에서 DLSS 앞에 실행 (temporal 없음)
-        // PT(1spp) → 로컬분산 A-trous(render-res) → DLSS(temporal+업스케일)
-        if (m_denoiseEnabled)
-        {
-            m_svgfDenoiserDLSS.Apply(cmd,
-                m_dlss.RenderAccumResource(),
-                m_dlss.RenderColorResource(),
-                m_dlss.DepthResource(),
-                m_dlss.NormalResource());
-
-            // 디노이저가 자체 힙을 바인딩하므로 메인 힙 복원
-            ID3D12DescriptorHeap* heaps[] = { m_core.CbvSrvUavHeap().Get() };
-            cmd->SetDescriptorHeaps(1, heaps);
-        }
-
-        // DLSS 업스케일: render-res → display-res
+        // DLSS-RR: AI 기반 denoising + temporal accumulation + upscaling 통합 1패스
+        // 입력: raw 1spp HDR(renderAccum), depth, motionVec, normals
         m_dlss.Evaluate(cmd, m_dlssJitterX, m_dlssJitterY, dlssReset);
 
         ++m_dlssFrameIdx;

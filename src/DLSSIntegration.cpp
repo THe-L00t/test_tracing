@@ -1,6 +1,7 @@
 #include "DLSSIntegration.h"
 #include "nvsdk_ngx.h"
 #include "nvsdk_ngx_helpers.h"
+#include "nvsdk_ngx_params_dlssd.h"
 #include <print>
 
 // ── 텍스처 생성 헬퍼 ─────────────────────────────────────────────
@@ -180,21 +181,29 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     makeVbSRV(roomVb,   roomVertCount);
     makeVbSRV(sphereVb, sphereVertCount);
 
-    // ── 5. DLSS 피처 생성 ─────────────────────────────────────────
-    NVSDK_NGX_DLSS_Create_Params cp{};
-    cp.Feature.InWidth           = m_renderW;
-    cp.Feature.InHeight          = m_renderH;
-    cp.Feature.InTargetWidth     = displayW;
-    cp.Feature.InTargetHeight    = displayH;
-    cp.Feature.InPerfQualityValue = NVSDK_NGX_PerfQuality_Value_MaxPerf;
-    // MVLowRes: MV 텍스처가 render 해상도 — 이 플래그 없으면 DLSS가 display 해상도로 샘플링해
-    // render-res 영역 밖에서 엣지 클램핑 → 3/4 화면 temporal reprojection 실패
-    cp.InFeatureCreateFlags      = NVSDK_NGX_DLSS_Feature_Flags_MVLowRes;
+    // ── 5. DLSS Ray Reconstruction (DLSS-RR) 피처 생성 ───────────
+    // DLSS SR 대신 RR: AI 기반 디노이저 + temporal accumulation + upscaling 통합
+    // 입력: raw 1spp HDR (m_renderAccum RGBA32F), 출력: display-res (m_dlssOutput)
+    // 요구사항: RTX 20xx 이상, 드라이버 530+, nvngx_dlssd.dll (드라이버 또는 앱 폴더)
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_CreationNodeMask,    1);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_VisibilityNodeMask,  1);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_Width,               m_renderW);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_Height,              m_renderH);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_OutWidth,            displayW);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_OutHeight,           displayH);
+    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_PerfQualityValue,    NVSDK_NGX_PerfQuality_Value_MaxPerf);
+    // MVLowRes: MV 텍스처가 render 해상도 (display 해상도 아님)
+    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, NVSDK_NGX_DLSS_Feature_Flags_MVLowRes);
+    // RR 전용 파라미터
+    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_DLSS_Denoise_Mode,   NVSDK_NGX_DLSS_Denoise_Mode_DLUnified);
+    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_DLSS_Roughness_Mode, NVSDK_NGX_DLSS_Roughness_Mode_Unpacked);
+    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_Use_HW_Depth,        NVSDK_NGX_DLSS_Depth_Type_Linear);
 
-    res = NGX_D3D12_CREATE_DLSS_EXT(cmdList, 1, 1, &m_feature, m_params, &cp);
+    res = NVSDK_NGX_D3D12_CreateFeature(cmdList, NVSDK_NGX_Feature_RayReconstruction, m_params, &m_feature);
     if (NVSDK_NGX_FAILED(res))
     {
-        std::println("[DLSS] CreateFeature 실패: 0x{:08X}", static_cast<uint32_t>(res));
+        std::println("[DLSS-RR] CreateFeature 실패: 0x{:08X}", static_cast<uint32_t>(res));
+        std::println("[DLSS-RR] RTX 20xx 이상 + 드라이버 530+ + nvngx_dlssd.dll 필요");
         NVSDK_NGX_D3D12_DestroyParameters(m_params);
         m_params = nullptr;
         NVSDK_NGX_D3D12_Shutdown1(device);
@@ -202,7 +211,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     }
 
     m_available = true;
-    std::println("[DLSS] 초기화 완료 — U 키로 온/오프 토글");
+    std::println("[DLSS-RR] Ray Reconstruction 초기화 완료 — U 키로 온/오프 토글");
     return true;
 }
 
@@ -249,7 +258,6 @@ void DLSSIntegration::UAVBarriers(ID3D12GraphicsCommandList* cmdList)
 void DLSSIntegration::Evaluate(ID3D12GraphicsCommandList* cmdList,
                                 float jitterX, float jitterY, bool reset)
 {
-    // color/depth/motionVec: UAV → NON_PIXEL_SHADER_RESOURCE (DLSS 입력)
     auto makeTransition = [](ID3D12Resource* res,
                               D3D12_RESOURCE_STATES before,
                               D3D12_RESOURCE_STATES after) -> D3D12_RESOURCE_BARRIER
@@ -263,43 +271,51 @@ void DLSSIntegration::Evaluate(ID3D12GraphicsCommandList* cmdList,
         return b;
     };
 
-    D3D12_RESOURCE_BARRIER toSRV[3] = {
-        makeTransition(m_renderColor.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-        makeTransition(m_depth.Get(),       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-        makeTransition(m_motionVec.Get(),   D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+    // RR 입력: raw HDR 1spp (renderAccum), depth, motionVec, normals → SRV
+    D3D12_RESOURCE_BARRIER toSRV[4] = {
+        makeTransition(m_renderAccum.Get(),  D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        makeTransition(m_depth.Get(),        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        makeTransition(m_motionVec.Get(),    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        makeTransition(m_renderNormal.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
     };
-    cmdList->ResourceBarrier(3, toSRV);
+    cmdList->ResourceBarrier(4, toSRV);
 
-    NVSDK_NGX_D3D12_DLSS_Eval_Params ep{};
-    ep.Feature.pInColor          = m_renderColor.Get();
-    ep.Feature.pInOutput         = m_dlssOutput.Get();
-    ep.Feature.InSharpness       = 0.0f;
-    ep.pInDepth                  = m_depth.Get();
-    ep.pInMotionVectors          = m_motionVec.Get();
-    ep.InJitterOffsetX           = jitterX;
-    ep.InJitterOffsetY           = jitterY;
-    ep.InReset                   = reset ? 1 : 0;
-    ep.InMVScaleX                = 1.0f;  // MV는 렌더 해상도 픽셀 단위 → scale=1.0 그대로
-    ep.InMVScaleY                = 1.0f;
-    ep.InRenderSubrectDimensions = { m_renderW, m_renderH };  // 입력 subrect = render-res 전체
+    // RR 파라미터: raw 1spp HDR(RGBA32F) + G-Buffer 보조 입력
+    NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_Color,           m_renderAccum.Get());
+    NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_Output,          m_dlssOutput.Get());
+    NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_Depth,           m_depth.Get());
+    NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_MotionVectors,   m_motionVec.Get());
+    NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_GBuffer_Normals, m_renderNormal.Get());
+    NVSDK_NGX_Parameter_SetF (m_params, NVSDK_NGX_Parameter_Jitter_Offset_X, jitterX);
+    NVSDK_NGX_Parameter_SetF (m_params, NVSDK_NGX_Parameter_Jitter_Offset_Y, jitterY);
+    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_Reset,    reset ? 1 : 0);
+    NVSDK_NGX_Parameter_SetF (m_params, NVSDK_NGX_Parameter_MV_Scale_X, 1.0f);
+    NVSDK_NGX_Parameter_SetF (m_params, NVSDK_NGX_Parameter_MV_Scale_Y, 1.0f);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width,  m_renderW);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, m_renderH);
+    NVSDK_NGX_Parameter_SetF (m_params, NVSDK_NGX_Parameter_DLSS_Pre_Exposure,   1.0f);
+    NVSDK_NGX_Parameter_SetF (m_params, NVSDK_NGX_Parameter_DLSS_Exposure_Scale, 1.0f);
 
-    NVSDK_NGX_Result res = NGX_D3D12_EVALUATE_DLSS_EXT(cmdList, m_feature, m_params, &ep);
+    NVSDK_NGX_Result res = NVSDK_NGX_D3D12_EvaluateFeature_C(cmdList, m_feature, m_params, NULL);
     if (NVSDK_NGX_FAILED(res))
-        std::println("[DLSS] Evaluate 실패: 0x{:08X}", static_cast<uint32_t>(res));
+        std::println("[DLSS-RR] Evaluate 실패: 0x{:08X}", static_cast<uint32_t>(res));
 
-    // NON_PIXEL_SHADER_RESOURCE → UAV 복원 (다음 프레임 DispatchRays 에서 씀)
-    D3D12_RESOURCE_BARRIER toUAV[3] = {
-        makeTransition(m_renderColor.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-        makeTransition(m_depth.Get(),       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-        makeTransition(m_motionVec.Get(),   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+    // SRV → UAV 복원 (다음 프레임 DispatchRays 에서 씀)
+    D3D12_RESOURCE_BARRIER toUAV[4] = {
+        makeTransition(m_renderAccum.Get(),  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        makeTransition(m_depth.Get(),        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        makeTransition(m_motionVec.Get(),    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        makeTransition(m_renderNormal.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
     };
-    cmdList->ResourceBarrier(3, toUAV);
+    cmdList->ResourceBarrier(4, toUAV);
 }
 
 // ── CopyOutputToBackBuffer ────────────────────────────────────────
