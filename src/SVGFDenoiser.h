@@ -2,75 +2,50 @@
 #include "Common.h"
 #include "DescriptorHeap.h"
 
-// SVGF 디노이저 — Spatiotemporal Variance-Guided Filtering
+// 분산 유도 A-trous 웨이블릿 디노이저 (공간 전용, temporal 없음)
 //
-// 패스 순서:
-//   Temporal: curIllum + prevAccum → accumPing, momentsCur  (지수이동평균 + 모멘트 누적)
-//   Wavelet 0 (step=1): accumPing → waveletPing
-//   Wavelet 1 (step=2): waveletPing → waveletPong
-//   Wavelet 2 (step=4, tonemap): waveletPong → renderColor (RGBA8, DLSS 입력)
-//   CopyResource: accumPing→accumPong, momentsCur→momentsPrev, depth→prevDepth, normals→prevNormal
+// DLSS 앞에서 현재 프레임의 1spp 공간 노이즈만 제거.
+// Temporal accumulation은 DLSS가 전담하므로 여기서 하지 않음.
 //
-// 사용 흐름:
-//   Init()   → 내부 버퍼·PSO·힙 초기화
-//   Apply()  → DispatchRays + UAVBarrier 완료 후, DLSS Evaluate 전에 호출
-//   Shutdown()→ 해제
+// 내부 패스 (3×3 로컬 분산으로 sigma 결정, 엣지 스토핑: depth + normal):
+//   Pass 0 (step=1): curIllum  → ping
+//   Pass 1 (step=2): ping      → pong
+//   Pass 2 (step=4): pong      → outputColor (RGBA8, Reinhard+gamma)
 class SVGFDenoiser
 {
 public:
     void Init(ID3D12Device5* device, uint32_t width, uint32_t height);
     void Shutdown();
 
-    // DispatchRays + UAVBarrier 완료 후 호출. 모든 외부 리소스는 UAV 상태로 진입.
-    // curIllum    : render-res RGBA32F — 현재 1spp PT 출력 (UAV)
-    // outputColor : render-res RGBA8   — DLSS 색상 입력 (UAV)
-    // depth       : render-res R32F    — NDC depth       (UAV)
-    // normals     : render-res RG16F   — oct-법선        (UAV)
-    // motionVec   : render-res RG16F   — MV curr→prev   (UAV)
-    // reset       : true 시 시간적 히스토리 강제 초기화 (씬 전환 등)
+    // DispatchRays + UAVBarrier 완료 후 호출. 모든 리소스 UAV 상태로 진입.
     void Apply(ID3D12GraphicsCommandList4* cmdList,
                ID3D12Resource* curIllum,
                ID3D12Resource* outputColor,
                ID3D12Resource* depth,
-               ID3D12Resource* normals,
-               ID3D12Resource* motionVec,
-               bool reset);
+               ID3D12Resource* normals);
 
     bool enabled = false;
 
 private:
     void CreateBuffers(uint32_t width, uint32_t height);
-    void CreateTemporalPSO();
-    void CreateWaveletPSO();
+    void CreatePSO();
     void BuildDescriptors(ID3D12Resource* curIllum,
                           ID3D12Resource* outputColor,
                           ID3D12Resource* depth,
-                          ID3D12Resource* normals,
-                          ID3D12Resource* motionVec);
+                          ID3D12Resource* normals);
 
     ID3D12Device5* m_device = nullptr;
 
-    ComPtr<ID3D12RootSignature> m_temporalRS;
-    ComPtr<ID3D12PipelineState> m_temporalPSO;
+    ComPtr<ID3D12RootSignature> m_rootSig;
+    ComPtr<ID3D12PipelineState> m_pso;
 
-    ComPtr<ID3D12RootSignature> m_waveletRS;
-    ComPtr<ID3D12PipelineState> m_waveletPSO;
+    ComPtr<ID3D12Resource> m_ping;  // RGBA32F ping-pong
+    ComPtr<ID3D12Resource> m_pong;  // RGBA32F ping-pong
 
-    // 내부 버퍼 (render-res)
-    ComPtr<ID3D12Resource> m_accumPing;    // RGBA32F — 시간적 누적 결과 (현재 프레임)
-    ComPtr<ID3D12Resource> m_accumPong;    // RGBA32F — 이전 프레임 누적 히스토리
-    ComPtr<ID3D12Resource> m_momentsCur;   // RGBA32F — 현재 모멘트 (.xy = μ, μ²)
-    ComPtr<ID3D12Resource> m_momentsPrev;  // RGBA32F — 이전 프레임 모멘트
-    ComPtr<ID3D12Resource> m_prevDepth;    // R32F    — 이전 프레임 depth
-    ComPtr<ID3D12Resource> m_prevNormal;   // RG16F   — 이전 프레임 oct-법선
-    ComPtr<ID3D12Resource> m_waveletPing;  // RGBA32F — 웨이블릿 중간 버퍼 A
-    ComPtr<ID3D12Resource> m_waveletPong;  // RGBA32F — 웨이블릿 중간 버퍼 B
-
-    // 25-slot 내부 디스크립터 힙
-    // [0-9]:   Temporal pass — SRV×8 (t0-t7) + UAV×2 (u0-u1)
-    // [10-14]: Wavelet pass 0 (step=1) — SRV×4 + UAV×1
-    // [15-19]: Wavelet pass 1 (step=2) — SRV×4 + UAV×1
-    // [20-24]: Wavelet pass 2 (step=4, tonemap) — SRV×4 + UAV×1 (RGBA8 outputColor)
+    // 12-slot 힙 (Denoiser와 동일 구조, SVGFWavelet.hlsl 사용)
+    // Pass 0 base=0:  [SRV:curIllum(t0), SRV:depth(t1), SRV:normals(t2), UAV:ping(u0)]
+    // Pass 1 base=4:  [SRV:ping(t0),     SRV:depth(t1), SRV:normals(t2), UAV:pong(u0)]
+    // Pass 2 base=8:  [SRV:pong(t0),     SRV:depth(t1), SRV:normals(t2), UAV:output(u0)]
     DescriptorHeap m_heap;
 
     uint32_t m_width  = 0;
@@ -78,5 +53,4 @@ private:
 
     bool m_initialized      = false;
     bool m_descriptorsBuilt = false;
-    bool m_firstFrame       = true;
 };

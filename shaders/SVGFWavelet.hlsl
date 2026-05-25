@@ -1,18 +1,11 @@
 // SVGFWavelet.hlsl
-// SVGF 분산 유도 A-trous 웨이블릿 패스
-//
-// 3패스 사용:
-//   Pass 0 (step=1, tonemap=0): accumPing → waveletPing
-//   Pass 1 (step=2, tonemap=0): waveletPing → waveletPong
-//   Pass 2 (step=4, tonemap=1): waveletPong → renderColor (RGBA8)
-//
-// 핵심: sigma_l = phi_color * sqrt(variance) — 분산이 클수록 필터 강도 증가
+// 분산 유도 A-trous 웨이블릿 — 3x3 로컬 분산 추정 (temporal 없음)
+// DLSS 앞에서 공간 노이즈만 제거; temporal accumulation은 DLSS에 위임
 
 Texture2D<float4>    g_input   : register(t0);  // RGBA32F: 입력 색상
 Texture2D<float>     g_depth   : register(t1);  // R32F:    NDC depth
 Texture2D<float2>    g_normals : register(t2);  // RG16F:   oct-법선
-Texture2D<float4>    g_moments : register(t3);  // RGBA32F: 누적 모멘트 (.xy = μ, μ²)
-RWTexture2D<float4>  g_output  : register(u0);  // 출력 (float4; 마지막 패스는 RGBA8 UAV)
+RWTexture2D<float4>  g_output  : register(u0);  // 출력 (마지막 패스는 RGBA8 UAV)
 
 cbuffer WaveletCB : register(b0)
 {
@@ -58,11 +51,24 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float2 n_center = g_normals.Load(int3(px, 0));
     float  lum_c    = Luminance(center.rgb);
 
-    // 분산 계산: σ² = E[X²] − E[X]²
-    float2 mom = g_moments.Load(int3(px, 0)).xy;
-    float  var = max(0.0f, mom.g - mom.r * mom.r);
-
-    // 분산 유도 휘도 sigma — 수렴된 픽셀은 sigma_l ≈ 0 → 필터 약해짐
+    // 3×3 이웃으로 현재 프레임 로컬 분산 추정 (temporal 불필요)
+    float lum_sum = 0.0f, lum_sq = 0.0f;
+    [unroll]
+    for (int ly = -1; ly <= 1; ++ly)
+    {
+        [unroll]
+        for (int lx = -1; lx <= 1; ++lx)
+        {
+            int2 sp = clamp(int2(px) + int2(lx, ly),
+                            int2(0, 0),
+                            int2((int)g_width - 1, (int)g_height - 1));
+            float l = Luminance(g_input.Load(int3(sp, 0)).rgb);
+            lum_sum += l;
+            lum_sq  += l * l;
+        }
+    }
+    float mu      = lum_sum / 9.0f;
+    float var     = max(0.0f, lum_sq / 9.0f - mu * mu);
     float sigma_l = g_phiColor * sqrt(var) + 1e-4f;
 
     float4 sum  = float4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -83,15 +89,12 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
             float kw = k_h[dx + 2] * k_h[dy + 2];
 
-            // 색상 가중치: 휘도 차이 기반, 분산 유도 sigma
             float dl = abs(lum_c - lum_s);
             float cw = exp(-dl * dl / (sigma_l * sigma_l + 1e-6f));
 
-            // depth 가중치
             float dd = abs(d_center - d);
             float dw = exp(-dd * dd / (2.0f * g_sigmaDepth * g_sigmaDepth + 1e-6f));
 
-            // 법선 가중치 (1 - cos(angle))
             float3 nc = OctDecode(n_center);
             float3 ns = OctDecode(n);
             float  dn = 1.0f - saturate(dot(nc, ns));

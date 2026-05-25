@@ -979,17 +979,15 @@ void App::OnRender()
         // RT 셰이더 쓰기 완료 보장 (renderColor, renderAccum, depth, motionVec, renderNormal)
         m_dlss.UAVBarriers(cmd);
 
-        // SVGF 디노이저: render-res에서 DLSS 앞에 실행
-        // PT(1spp) → SVGF(temporal+wavelet, render-res) → DLSS(업스케일)
+        // 분산 유도 공간 디노이저: render-res에서 DLSS 앞에 실행 (temporal 없음)
+        // PT(1spp) → 로컬분산 A-trous(render-res) → DLSS(temporal+업스케일)
         if (m_denoiseEnabled)
         {
             m_svgfDenoiserDLSS.Apply(cmd,
                 m_dlss.RenderAccumResource(),
                 m_dlss.RenderColorResource(),
                 m_dlss.DepthResource(),
-                m_dlss.NormalResource(),
-                m_dlss.MotionVecResource(),
-                dlssReset);
+                m_dlss.NormalResource());
 
             // 디노이저가 자체 힙을 바인딩하므로 메인 힙 복원
             ID3D12DescriptorHeap* heaps[] = { m_core.CbvSrvUavHeap().Get() };
