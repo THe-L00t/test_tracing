@@ -372,7 +372,8 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
 
     m_sceneBuilt = true;
     std::println("[App] 초기화 완료 - 씬 0 (야외)");
-    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, R 디노이저, U DLSS, ESC 종료");
+    std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3/4 씬 전환, R 디노이저, U DLSS, ESC 종료");
+    std::println("[App] 디버그: F1 importance heatmap, F2 metric cycle, F3 DFTC target 1ms 토글");
 }
 
 void App::Shutdown()
@@ -676,6 +677,67 @@ void App::SwitchScene(uint32_t id)
         m_tlas.Build(m_core.Device(), m_core.CmdList(),
                      std::span{ instances });
     }
+    else if (m_sceneID == 3)
+    {
+        // 씬 3 (Fresnel 쇼케이스) — feature/fresnel-guided-pt 에서 port
+        //   닫힌 방 + 크롬 바닥 + 유리/골드 구. 7 instances + grazing 시점
+        //   → GI 순환 + 굴절 + 반사로 GPU 부하 큰 씬 (DFTC trigger 검증용)
+        std::println("[App] 씬 3 (Fresnel 쇼케이스) 전환");
+        m_camera.Init(0.0f, 0.35f, -3.5f, 0.08f, 0.0f);
+
+        TLASInstance instances[7]{};
+
+        // 크롬 미러 바닥 (mat0)
+        MakeIdentityTransform(instances[0].transform);
+        instances[0].blasResource = m_planeBLAS.Resource();
+        instances[0].instanceID   = EncodeID(0, 0);
+        instances[0].mask         = 0xFF;
+
+        // 왼쪽 벽 (mat3 흰색)
+        MakeScaleTranslateTransform(instances[1].transform,
+            0.3f, 7.0f, 14.0f,  -5.0f, 3.0f, 1.0f);
+        instances[1].blasResource = m_cubeBLAS.Resource();
+        instances[1].instanceID   = EncodeID(1, 3);
+        instances[1].mask         = 0xFF;
+
+        // 오른쪽 벽
+        MakeScaleTranslateTransform(instances[2].transform,
+            0.3f, 7.0f, 14.0f,  5.0f, 3.0f, 1.0f);
+        instances[2].blasResource = m_cubeBLAS.Resource();
+        instances[2].instanceID   = EncodeID(1, 3);
+        instances[2].mask         = 0xFF;
+
+        // 천장
+        MakeScaleTranslateTransform(instances[3].transform,
+            10.6f, 0.3f, 14.0f,  0.0f, 6.0f, 1.0f);
+        instances[3].blasResource = m_cubeBLAS.Resource();
+        instances[3].instanceID   = EncodeID(1, 3);
+        instances[3].mask         = 0xFF;
+
+        // 뒷벽
+        MakeScaleTranslateTransform(instances[4].transform,
+            10.6f, 7.0f, 0.3f,  0.0f, 3.0f, 8.0f);
+        instances[4].blasResource = m_cubeBLAS.Resource();
+        instances[4].instanceID   = EncodeID(1, 3);
+        instances[4].mask         = 0xFF;
+
+        // 골드 메탈릭 구 — 왼쪽 (mat1)
+        MakeScaleTranslateTransform(instances[5].transform,
+            0.6f, 0.6f, 0.6f,  -1.3f, 0.6f, 1.5f);
+        instances[5].blasResource = m_sphereBLAS.Resource();
+        instances[5].instanceID   = EncodeID(3, 1);
+        instances[5].mask         = 0xFF;
+
+        // 유리 구 — 오른쪽 (mat2)
+        MakeScaleTranslateTransform(instances[6].transform,
+            0.65f, 0.65f, 0.65f,  1.3f, 0.65f, 1.5f);
+        instances[6].blasResource = m_sphereBLAS.Resource();
+        instances[6].instanceID   = EncodeID(3, 2);
+        instances[6].mask         = 0x02; // 유리 — 그림자 레이 제외
+
+        m_tlas.Build(m_core.Device(), m_core.CmdList(),
+                     std::span{ instances });
+    }
     else
     {
         // 씬 1 (실내): 방 + 큐브
@@ -875,6 +937,46 @@ void App::UpdateSceneCB()
         cb.matMetallic[3] = 0.0f;
         cb.emissBoxHalfSize = 0.0f;
     }
+    else if (m_sceneID == 3)
+    {
+        // ── 씬 3 (Fresnel 쇼케이스): 닫힌 방 + 측면 포인트 라이트 2개 ──
+        //   feature/fresnel-guided-pt 에서 port. 7 instances + grazing 시점
+        //   → 크롬 바닥 grazing 반사 + 유리 구 굴절 + 흰 벽 GI 순환
+        //   DFTC trigger 검증용 (GPU 부하 큰 씬)
+        cb.lightPos[0]=-3.5f; cb.lightPos[1]=4.5f; cb.lightPos[2]=2.0f;
+        cb.lightIntensity=20.0f;
+        cb.lightColor[0]=1.0f; cb.lightColor[1]=0.95f; cb.lightColor[2]=0.88f;
+
+        cb.light2Pos[0]=3.5f; cb.light2Pos[1]=4.0f; cb.light2Pos[2]=1.0f;
+        cb.light2Intensity=12.0f;
+        cb.light2Color[0]=0.85f; cb.light2Color[1]=0.90f; cb.light2Color[2]=1.00f;
+
+        // mat0: 크롬 미러 바닥
+        cb.matAlbedoRoughness[0][0]=0.88f; cb.matAlbedoRoughness[0][1]=0.88f;
+        cb.matAlbedoRoughness[0][2]=0.88f; cb.matAlbedoRoughness[0][3]=0.02f;
+        cb.matMetallic[0] = 1.0f;
+        cb.matEmissive[0] = 0.0f;
+
+        // mat1: 골드 메탈릭 구
+        cb.matAlbedoRoughness[1][0]=1.00f; cb.matAlbedoRoughness[1][1]=0.71f;
+        cb.matAlbedoRoughness[1][2]=0.29f; cb.matAlbedoRoughness[1][3]=0.05f;
+        cb.matMetallic[1] = 1.0f;
+        cb.matEmissive[1] = 0.0f;
+
+        // mat2: 유리 구 (IOR=1.5)
+        cb.matAlbedoRoughness[2][0]=0.97f; cb.matAlbedoRoughness[2][1]=0.98f;
+        cb.matAlbedoRoughness[2][2]=1.00f; cb.matAlbedoRoughness[2][3]=0.02f;
+        cb.matMetallic[2] = 0.0f;
+        cb.matEmissive[2] = -2.0f; // 유리 신호
+
+        // mat3: 흰 벽/천장 — 간접광 순환용 고albedo
+        cb.matAlbedoRoughness[3][0]=0.90f; cb.matAlbedoRoughness[3][1]=0.90f;
+        cb.matAlbedoRoughness[3][2]=0.90f; cb.matAlbedoRoughness[3][3]=0.90f;
+        cb.matMetallic[3] = 0.0f;
+        cb.matEmissive[3] = 0.0f;
+
+        cb.emissBoxHalfSize = 0.0f;
+    }
     else
     {
         // ── 씬 2 (투명/반투명 구 쇼케이스): 포인트 라이트 2개 ──
@@ -986,6 +1088,7 @@ void App::OnKeyDown(uint32_t key)
     if (key == '1') SwitchScene(0);
     else if (key == '2') SwitchScene(1);
     else if (key == '3') SwitchScene(2);
+    else if (key == '4') SwitchScene(3);  // Fresnel 쇼케이스 (heavy)
     else if (key == 'R')
     {
         m_denoiseEnabled   = !m_denoiseEnabled;
