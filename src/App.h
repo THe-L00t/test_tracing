@@ -86,8 +86,14 @@ private:
 
     // G-Buffer (full-res, 비DLSS 모드에서 RT 셰이더가 씀 / A-trous 디노이저가 읽음)
     // DLSS 모드에서는 m_dlss 내부 버퍼를 u2/u3에 바인딩하므로 이 버퍼는 비활성
-    ComPtr<ID3D12Resource> m_gbufferDepth;   // R32_FLOAT — NDC depth (u2)
-    ComPtr<ID3D12Resource> m_gbufferNormal;  // RG16_FLOAT — oct-인코딩 법선 (u3)
+    ComPtr<ID3D12Resource> m_gbufferDepth;       // R32_FLOAT — NDC depth (u2)
+    ComPtr<ID3D12Resource> m_gbufferNormal;      // RGBA16_FLOAT — world-법선(xyz)+roughness(w) (u3/u4)
+    ComPtr<ID3D12Resource> m_gbufferDiffAlbedo;  // RGBA16_FLOAT — DLSS-RR diffuse albedo (u5)
+    ComPtr<ID3D12Resource> m_gbufferSpecAlbedo;  // RGBA16_FLOAT — DLSS-RR specular F0   (u6)
+    // NRD 입력 (비DLSS 모드에서는 미사용이지만 root sig 매칭을 위해 바인딩)
+    ComPtr<ID3D12Resource> m_nrdDiffRadiance;    // RGBA16_FLOAT — NRD IN_DIFF_RADIANCE_HITDIST (u7)
+    ComPtr<ID3D12Resource> m_nrdSpecRadiance;    // RGBA16_FLOAT — NRD IN_SPEC_RADIANCE_HITDIST (u8)
+    ComPtr<ID3D12Resource> m_nrdViewZ;           // R16_FLOAT    — NRD IN_VIEWZ                  (u9)
     bool            m_dlssEnabled    = false;
     uint32_t        m_dlssFrameIdx   = 0;    // Halton 시퀀스 인덱스
     float           m_dlssJitterX    = 0.0f; // 현재 프레임 Halton X (Evaluate에도 전달)

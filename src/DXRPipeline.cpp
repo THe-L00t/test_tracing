@@ -84,12 +84,13 @@ namespace
 ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
 {
     // 파라미터 0: 디스크립터 테이블
-    //   Range 0: UAV 5개 (u0..u4) - 출력+누적+depth+motionVec+normals
+    //   Range 0: UAV 10개 (u0..u9) - 출력+누적+depth+motionVec+normals+diffAlbedo+specAlbedo
+    //                                + NRD: diffRadHit + specRadHit + viewZ
     //   Range 1: SRV 5개 (t0..t4) - TLAS + VB 4개
     D3D12_DESCRIPTOR_RANGE1 ranges[2]{};
 
     ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    ranges[0].NumDescriptors                    = 5;   // u0-u4
+    ranges[0].NumDescriptors                    = 10;  // u0-u9 (u7~u9: NRD inputs)
     ranges[0].BaseShaderRegister                = 0;
     ranges[0].RegisterSpace                     = 0;
     ranges[0].OffsetInDescriptorsFromTableStart = 0;
@@ -99,7 +100,7 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[1].NumDescriptors                    = 5;   // t0(TLAS) + t1(plane) + t2(cube) + t3(room) + t4(sphere)
     ranges[1].BaseShaderRegister                = 0;
     ranges[1].RegisterSpace                     = 0;
-    ranges[1].OffsetInDescriptorsFromTableStart = 5;   // 힙 슬롯 5부터 (UAV 5개 다음)
+    ranges[1].OffsetInDescriptorsFromTableStart = 10;  // 힙 슬롯 10부터 (UAV 10개 다음)
     ranges[1].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     D3D12_ROOT_PARAMETER1 params[2]{};
@@ -160,10 +161,12 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
     hitGroup.ClosestHitShaderImport = L"ClosestHit";
 
     // 3. 셰이더 설정
-    //    RayPayload: float3×4 + float(scatterPdf) + uint×3 = 48+4+12 = 64 bytes
+    //    RayPayload: float3×4 + float(scatterPdf) + uint×3 + float(hitDist) + float3(hitNormal)
+    //              + float(hitRoughness) + float3(hitAlbedo) + float(hitMetallic)
+    //              + uint(primaryLobeIsSpec) + float(firstBounceHitDist) = 108 bytes
     //    ShadowPayload: float = 4 bytes
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig{};
-    shaderConfig.MaxPayloadSizeInBytes   = 80;  // RayPayload 크기 (hitNormal float3 추가로 80)
+    shaderConfig.MaxPayloadSizeInBytes   = 108;  // RayPayload 크기 (NRD primary lobe + firstBounceHitDist 추가)
     shaderConfig.MaxAttributeSizeInBytes = sizeof(float) * 2;  // 배리센트릭
 
     // 4. 파이프라인 설정

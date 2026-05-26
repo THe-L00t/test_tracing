@@ -9,19 +9,24 @@ struct NVSDK_NGX_Parameter;
 // ---------------------------------------------------------------
 // DLSS Super Resolution 통합 클래스
 //
-// 힙 슬롯 배치 (BuildDescriptors 완료 후 Init 호출 기준, 슬롯 0..9 선점 후):
-//  [10]  UAV m_renderColor  (RGBA8,         render res) ← RT shader u0
-//  [11]  UAV m_renderAccum  (RGBA32F,        render res) ← RT shader u1
-//  [12]  UAV m_depth        (R32_FLOAT,      render res) ← RT shader u2
-//  [13]  UAV m_motionVec    (R16G16_FLOAT,   render res) ← RT shader u3
-//  [14]  UAV m_renderNormal (R16G16_FLOAT,   render res) ← RT shader u4 (oct-법선)
-//  [15]  SRV TLAS 미러      ← t0
-//  [16]  SRV plane VB 미러  ← t1
-//  [17]  SRV cube VB 미러   ← t2
-//  [18]  SRV room VB 미러   ← t3
-//  [19]  SRV sphere VB 미러 ← t4
+// 힙 슬롯 배치 (BuildDescriptors 완료 후 Init 호출 기준, 슬롯 0..14 선점 후):
+//  [15]  UAV m_renderColor    (RGBA8,         render res) ← RT shader u0
+//  [16]  UAV m_renderAccum    (RGBA32F,        render res) ← RT shader u1
+//  [17]  UAV m_depth          (R32_FLOAT,      render res) ← RT shader u2
+//  [18]  UAV m_motionVec      (R16G16_FLOAT,   render res) ← RT shader u3
+//  [19]  UAV m_renderNormal   (R16G16B16A16_F, render res) ← RT shader u4 (world-법선 xyz + roughness w)
+//  [20]  UAV m_diffuseAlbedo  (R16G16B16A16_F, render res) ← RT shader u5 (DLSS-RR diffuse albedo)
+//  [21]  UAV m_specularAlbedo (R16G16B16A16_F, render res) ← RT shader u6 (DLSS-RR specular F0)
+//  [22]  UAV m_nrdDiffRadiance(R16G16B16A16_F, render res) ← RT shader u7 (NRD diff radiance + hitDist)
+//  [23]  UAV m_nrdSpecRadiance(R16G16B16A16_F, render res) ← RT shader u8 (NRD spec radiance + hitDist)
+//  [24]  UAV m_nrdViewZ       (R16_FLOAT,      render res) ← RT shader u9 (NRD linear view Z)
+//  [25]  SRV TLAS 미러        ← t0
+//  [26]  SRV plane VB 미러    ← t1
+//  [27]  SRV cube VB 미러     ← t2
+//  [28]  SRV room VB 미러     ← t3
+//  [29]  SRV sphere VB 미러   ← t4
 //
-// DLSS 모드 시 SetComputeRootDescriptorTable(0, heap[10]) 로
+// DLSS 모드 시 SetComputeRootDescriptorTable(0, heap[15]) 로
 // 기존 루트 시그니처를 그대로 재사용한다.
 // ---------------------------------------------------------------
 class DLSSIntegration
@@ -70,6 +75,10 @@ public:
     ID3D12Resource* DepthResource()       const noexcept { return m_depth.Get(); }
     ID3D12Resource* MotionVecResource()   const noexcept { return m_motionVec.Get(); }
     ID3D12Resource* NormalResource()      const noexcept { return m_renderNormal.Get(); }
+    // NRD 입력 접근자 (NRDDenoiser 가 SetCommonSettings/Denoise 에 전달)
+    ID3D12Resource* NrdDiffRadiance()     const noexcept { return m_nrdDiffRadiance.Get(); }
+    ID3D12Resource* NrdSpecRadiance()     const noexcept { return m_nrdSpecRadiance.Get(); }
+    ID3D12Resource* NrdViewZ()            const noexcept { return m_nrdViewZ.Get(); }
 
 private:
     NVSDK_NGX_Handle*    m_feature = nullptr;
@@ -82,7 +91,16 @@ private:
     // DLSS 보조 입력 + A-trous 엣지 스토핑용 법선
     ComPtr<ID3D12Resource> m_depth;        // R32_FLOAT,    render res
     ComPtr<ID3D12Resource> m_motionVec;    // R16G16_FLOAT, render res
-    ComPtr<ID3D12Resource> m_renderNormal; // R16G16_FLOAT, render res (oct-법선 u4)
+    ComPtr<ID3D12Resource> m_renderNormal; // R16G16B16A16_FLOAT, render res (oct-법선 xy + roughness w, DLSS-RR Packed)
+
+    // DLSS-RR 필수 GBuffer (없으면 Evaluate 시 0xBAD0000A FAIL_MissingInput)
+    ComPtr<ID3D12Resource> m_diffuseAlbedo;  // R16G16B16A16_FLOAT, render res (DLSS.Input.DiffuseAlbedo)
+    ComPtr<ID3D12Resource> m_specularAlbedo; // R16G16B16A16_FLOAT, render res (DLSS.Input.SpecularAlbedo)
+
+    // NRD 입력 (path tracer → NRD denoise → DLSS-RR 입력 파이프라인용)
+    ComPtr<ID3D12Resource> m_nrdDiffRadiance;  // R16G16B16A16_FLOAT, render res (NRD IN_DIFF_RADIANCE_HITDIST)
+    ComPtr<ID3D12Resource> m_nrdSpecRadiance;  // R16G16B16A16_FLOAT, render res (NRD IN_SPEC_RADIANCE_HITDIST)
+    ComPtr<ID3D12Resource> m_nrdViewZ;         // R16_FLOAT,          render res (NRD IN_VIEWZ)
 
     // DLSS 출력 (디스플레이 해상도, 백버퍼와 동일 포맷)
     ComPtr<ID3D12Resource> m_dlssOutput;

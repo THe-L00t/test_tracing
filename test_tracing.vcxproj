@@ -55,7 +55,7 @@
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)third_party\dlss\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)third_party\dlss\include;$(ProjectDir)third_party\nrd\include;$(ProjectDir)third_party\nrd\shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>Disabled</Optimization>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
@@ -63,8 +63,8 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;nvsdk_ngx_d_dbg.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)third_party\dlss\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;nvsdk_ngx_d_dbg.lib;NRD.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)third_party\dlss\lib;$(ProjectDir)third_party\nrd\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
 
@@ -75,7 +75,7 @@
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)third_party\dlss\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)third_party\dlss\include;$(ProjectDir)third_party\nrd\include;$(ProjectDir)third_party\nrd\shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -85,8 +85,8 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;nvsdk_ngx_d.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)third_party\dlss\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;nvsdk_ngx_d.lib;NRD.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)third_party\dlss\lib;$(ProjectDir)third_party\nrd\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
 
@@ -133,8 +133,8 @@
   <!-- nvngx_dlss.dll: DLSS SR 런타임 / nvngx_dlssd.dll: DLSS RR (Ray Reconstruction) 런타임 -->
   <ItemDefinitionGroup>
     <PostBuildEvent>
-      <Command>copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxcompiler.dll" "$(OutDir)dxcompiler.dll" &amp; copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxil.dll" "$(OutDir)dxil.dll" &amp; if exist "$(ProjectDir)third_party\dlss\bin\nvngx_dlss.dll" copy /y "$(ProjectDir)third_party\dlss\bin\nvngx_dlss.dll" "$(OutDir)nvngx_dlss.dll" &amp; if exist "$(ProjectDir)third_party\dlss\bin\nvngx_dlssd.dll" copy /y "$(ProjectDir)third_party\dlss\bin\nvngx_dlssd.dll" "$(OutDir)nvngx_dlssd.dll"</Command>
-      <Message>DXC / DLSS DLL 복사 중...</Message>
+      <Command>copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxcompiler.dll" "$(OutDir)dxcompiler.dll" &amp; copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxil.dll" "$(OutDir)dxil.dll" &amp; if exist "$(ProjectDir)third_party\dlss\bin\nvngx_dlss.dll" copy /y "$(ProjectDir)third_party\dlss\bin\nvngx_dlss.dll" "$(OutDir)nvngx_dlss.dll" &amp; if exist "$(ProjectDir)third_party\dlss\bin\nvngx_dlssd.dll" copy /y "$(ProjectDir)third_party\dlss\bin\nvngx_dlssd.dll" "$(OutDir)nvngx_dlssd.dll" &amp; if exist "$(ProjectDir)third_party\nrd\bin\NRD.dll" copy /y "$(ProjectDir)third_party\nrd\bin\NRD.dll" "$(OutDir)NRD.dll"</Command>
+      <Message>DXC / DLSS / NRD DLL 복사 중...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
 

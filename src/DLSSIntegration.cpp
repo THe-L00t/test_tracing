@@ -72,15 +72,22 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     featureInfo.PathListInfo.Path   = searchPaths;
     featureInfo.PathListInfo.Length = 1;
 
-    NVSDK_NGX_Result res = NVSDK_NGX_D3D12_Init(0x534C5344 /*'DLSS'*/, exeDir.c_str(),
-                                                 device, &featureInfo, NVSDK_NGX_Version_API);
+    // ProjectID 기반 초기화 — 임의의 App ID(0x534C5344 'DLSS')는 NVIDIA 화이트리스트
+    // 미등록 상태라 RR Available=0 으로 차단된다. ProjectID + ENGINE_TYPE_CUSTOM 경로는
+    // 연구/개발용으로 NVIDIA가 공식 지원하므로 RTX 20xx+ GPU에서 RR이 정상 활성화된다.
+    // ProjectID는 GUID 형식 문자열이면 충분 (NVIDIA 등록 불필요).
+    NVSDK_NGX_Result res = NVSDK_NGX_D3D12_Init_with_ProjectID(
+        "a1b2c3d4-e5f6-7890-abcd-ef1234567890",   // ProjectID (개발용 GUID)
+        NVSDK_NGX_ENGINE_TYPE_CUSTOM,
+        "1.0.0",                                   // EngineVersion
+        exeDir.c_str(), device, &featureInfo, NVSDK_NGX_Version_API);
     if (NVSDK_NGX_FAILED(res))
     {
-        std::println("[DLSS] NGX_D3D12_Init 실패: 0x{:08X} (비-NVIDIA GPU 또는 구형 드라이버)",
+        std::println("[DLSS] NGX_D3D12_Init_with_ProjectID 실패: 0x{:08X} (비-NVIDIA GPU 또는 구형 드라이버)",
                      static_cast<uint32_t>(res));
         return false;
     }
-    std::println("[DLSS] NGX_D3D12_Init OK");
+    std::println("[DLSS] NGX_D3D12_Init_with_ProjectID OK (ENGINE_TYPE_CUSTOM)");
 
     res = NVSDK_NGX_D3D12_GetCapabilityParameters(&m_params);
     if (NVSDK_NGX_FAILED(res))
@@ -109,11 +116,11 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         std::println("[DLSS-RR] 요구사항: RTX 20xx 이상 + 드라이버 537.58+ (DLSS 3.5 출시)");
     }
 
-    // ── 2. 렌더 해상도 쿼리 (Performance 모드 ≈ 50%) ─────────────
+    // ── 2. 렌더 해상도 쿼리 (Quality 모드 ≈ 67% 스케일 = 약 44% 픽셀) ─────
     uint32_t optW = 0, optH = 0, maxW = 0, maxH = 0, minW = 0, minH = 0;
     float sharpness = 0.0f;
     res = NGX_DLSS_GET_OPTIMAL_SETTINGS(m_params,
-        displayW, displayH, NVSDK_NGX_PerfQuality_Value_MaxPerf,
+        displayW, displayH, NVSDK_NGX_PerfQuality_Value_MaxQuality,
         &optW, &optH, &maxW, &maxH, &minW, &minH, &sharpness);
 
     if (NVSDK_NGX_FAILED(res) || optW == 0 || optH == 0)
@@ -129,7 +136,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     m_renderH = optH;
 
     const float scale = 100.0f * float(m_renderW * m_renderH) / float(displayW * displayH);
-    std::println("[DLSS] 렌더: {}x{} → 출력: {}x{} (Performance, {:.0f}% 픽셀)",
+    std::println("[DLSS] 렌더: {}x{} → 출력: {}x{} (Quality, {:.0f}% 픽셀)",
                  m_renderW, m_renderH, displayW, displayH, scale);
 
     // ── 3. 리소스 생성 ────────────────────────────────────────────
@@ -138,12 +145,26 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     m_dlssOutput   = MakeUAVTex(device, displayW,  displayH,  DXGI_FORMAT_R8G8B8A8_UNORM);
     m_depth        = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R32_FLOAT);
     m_motionVec    = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R16G16_FLOAT);
-    m_renderNormal = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R16G16_FLOAT);
+    // oct-법선(xy) + 0(z) + roughness(w) — DLSS-RR Packed Roughness 모드 + A-trous 공용
+    m_renderNormal = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    // DLSS-RR 필수 입력: DiffuseAlbedo + SpecularAlbedo (없으면 Evaluate 0xBAD0000A)
+    m_diffuseAlbedo  = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    m_specularAlbedo = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R16G16B16A16_FLOAT);
 
-    m_renderColor ->SetName(L"DLSS_RenderColor");
-    m_renderAccum ->SetName(L"DLSS_RenderAccum");
-    m_dlssOutput  ->SetName(L"DLSS_Output");
-    m_renderNormal->SetName(L"DLSS_RenderNormal");
+    // NRD 입력 (path tracer 가 RT 셰이더에서 u7/u8/u9 로 기록)
+    m_nrdDiffRadiance = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    m_nrdSpecRadiance = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    m_nrdViewZ        = MakeUAVTex(device, m_renderW, m_renderH, DXGI_FORMAT_R16_FLOAT);
+
+    m_renderColor    ->SetName(L"DLSS_RenderColor");
+    m_renderAccum    ->SetName(L"DLSS_RenderAccum");
+    m_dlssOutput     ->SetName(L"DLSS_Output");
+    m_renderNormal   ->SetName(L"DLSS_RenderNormal");
+    m_diffuseAlbedo  ->SetName(L"DLSS_DiffuseAlbedo");
+    m_specularAlbedo ->SetName(L"DLSS_SpecularAlbedo");
+    m_nrdDiffRadiance->SetName(L"NRD_DiffRadianceHitDist");
+    m_nrdSpecRadiance->SetName(L"NRD_SpecRadianceHitDist");
+    m_nrdViewZ       ->SetName(L"NRD_ViewZ");
 
     // ── 4. 공유 힙에 UAV/SRV 등록 ───────────────────────────────
     // shader-visible 힙은 CPU read 불가 → CopyDescriptors 사용 불가
@@ -182,15 +203,55 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R16G16_FLOAT;
         device->CreateUnorderedAccessView(m_motionVec.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 14: UAV m_renderNormal (u4, oct-법선 — A-trous 디노이저 입력)
+    // 슬롯 16: UAV m_renderNormal (u4, oct-법선 xy + roughness w — DLSS-RR Packed + A-trous 공용)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
         uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        uav.Format        = DXGI_FORMAT_R16G16_FLOAT;
+        uav.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
         device->CreateUnorderedAccessView(m_renderNormal.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 15: SRV TLAS 미러
+    // 슬롯 17: UAV m_diffuseAlbedo (u5, DLSS-RR DiffuseAlbedo)
+    {
+        DescriptorHandle h = sharedHeap.Allocate();
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        device->CreateUnorderedAccessView(m_diffuseAlbedo.Get(), nullptr, &uav, h.cpu);
+    }
+    // 슬롯 21: UAV m_specularAlbedo (u6, DLSS-RR SpecularAlbedo F0)
+    {
+        DescriptorHandle h = sharedHeap.Allocate();
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        device->CreateUnorderedAccessView(m_specularAlbedo.Get(), nullptr, &uav, h.cpu);
+    }
+    // 슬롯 22: UAV m_nrdDiffRadiance (u7, NRD diff radiance + hitDist)
+    {
+        DescriptorHandle h = sharedHeap.Allocate();
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        device->CreateUnorderedAccessView(m_nrdDiffRadiance.Get(), nullptr, &uav, h.cpu);
+    }
+    // 슬롯 23: UAV m_nrdSpecRadiance (u8, NRD spec radiance + hitDist)
+    {
+        DescriptorHandle h = sharedHeap.Allocate();
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        device->CreateUnorderedAccessView(m_nrdSpecRadiance.Get(), nullptr, &uav, h.cpu);
+    }
+    // 슬롯 24: UAV m_nrdViewZ (u9, NRD linear view Z)
+    {
+        DescriptorHandle h = sharedHeap.Allocate();
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format        = DXGI_FORMAT_R16_FLOAT;
+        device->CreateUnorderedAccessView(m_nrdViewZ.Get(), nullptr, &uav, h.cpu);
+    }
+    // 슬롯 25: SRV TLAS 미러
     {
         DescriptorHandle h = sharedHeap.Allocate();
         m_tlasMirrorCPU = h.cpu;
@@ -227,16 +288,55 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_Height,              m_renderH);
     NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_OutWidth,            displayW);
     NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_OutHeight,           displayH);
-    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_PerfQualityValue,    NVSDK_NGX_PerfQuality_Value_MaxPerf);
-    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, NVSDK_NGX_DLSS_Feature_Flags_MVLowRes);
+    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_PerfQualityValue,    NVSDK_NGX_PerfQuality_Value_MaxQuality);
+    // 입력은 path tracer raw HDR(RGBA32F, >1.0 가능) + render-res MV
+    //  - IsHDR    : color 입력이 HDR linear 임을 알림 (필수, 없으면 InvalidParameter)
+    //  - MVLowRes : 모션벡터를 render-res 로 제공 (현재 셰이더가 render-res 단위로 기록)
+    const int featureFlags = NVSDK_NGX_DLSS_Feature_Flags_IsHDR
+                           | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes;
+    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, featureFlags);
     NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_DLSS_Denoise_Mode,   NVSDK_NGX_DLSS_Denoise_Mode_DLUnified);
-    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_DLSS_Roughness_Mode, NVSDK_NGX_DLSS_Roughness_Mode_Unpacked);
-    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_Use_HW_Depth,        NVSDK_NGX_DLSS_Depth_Type_Linear);
+    // Packed: roughness 가 normals.w 채널에 패킹 — 별도 GBuffer.Roughness 텍스처 불필요
+    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_DLSS_Roughness_Mode, NVSDK_NGX_DLSS_Roughness_Mode_Packed);
+    // 셰이더가 NDC depth 를 g_depth 에 기록하므로 HW depth 모드를 알린다 (Linear 로 두면 InvalidParameter)
+    NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_Use_HW_Depth,        NVSDK_NGX_DLSS_Depth_Type_HW);
+
+    // RR Render Preset = E (최신 transformer 모델)
+    //   기본 모델(D) 보다 노이지 입력에 robust 하며 path-traced HDR 의 분산을 더 잘 처리.
+    //   모든 PerfQuality 레벨에 같은 preset 을 명시 (사용자가 모드 바꿔도 일관 적용).
+    const uint32_t presetE = NVSDK_NGX_RayReconstruction_Hint_Render_Preset_E;
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA,             presetE);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality,          presetE);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced,         presetE);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance,      presetE);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance, presetE);
+    NVSDK_NGX_Parameter_SetUI(m_params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality,     presetE);
 
     res = NVSDK_NGX_D3D12_CreateFeature(cmdList, NVSDK_NGX_Feature_RayReconstruction, m_params, &m_feature);
     if (NVSDK_NGX_FAILED(res))
     {
-        std::println("[DLSS-RR] CreateFeature 실패: 0x{:08X}", static_cast<uint32_t>(res));
+        const char* errName = "Unknown";
+        switch (res)
+        {
+            case NVSDK_NGX_Result_FAIL_FeatureNotSupported:      errName = "FeatureNotSupported";      break;
+            case NVSDK_NGX_Result_FAIL_PlatformError:            errName = "PlatformError";            break;
+            case NVSDK_NGX_Result_FAIL_FeatureAlreadyExists:     errName = "FeatureAlreadyExists";     break;
+            case NVSDK_NGX_Result_FAIL_FeatureNotFound:          errName = "FeatureNotFound";          break;
+            case NVSDK_NGX_Result_FAIL_InvalidParameter:         errName = "InvalidParameter";         break;
+            case NVSDK_NGX_Result_FAIL_ScratchBufferTooSmall:    errName = "ScratchBufferTooSmall";    break;
+            case NVSDK_NGX_Result_FAIL_NotInitialized:           errName = "NotInitialized";           break;
+            case NVSDK_NGX_Result_FAIL_UnsupportedInputFormat:   errName = "UnsupportedInputFormat";   break;
+            case NVSDK_NGX_Result_FAIL_RWFlagMissing:            errName = "RWFlagMissing";            break;
+            case NVSDK_NGX_Result_FAIL_MissingInput:             errName = "MissingInput";             break;
+            case NVSDK_NGX_Result_FAIL_UnableToInitializeFeature:errName = "UnableToInitializeFeature";break;
+            case NVSDK_NGX_Result_FAIL_OutOfDate:                errName = "OutOfDate";                break;
+            case NVSDK_NGX_Result_FAIL_OutOfGPUMemory:           errName = "OutOfGPUMemory";           break;
+            case NVSDK_NGX_Result_FAIL_UnsupportedFormat:        errName = "UnsupportedFormat";        break;
+            case NVSDK_NGX_Result_FAIL_UnsupportedParameter:     errName = "UnsupportedParameter";     break;
+            case NVSDK_NGX_Result_FAIL_Denied:                   errName = "Denied";                   break;
+            case NVSDK_NGX_Result_FAIL_NotImplemented:           errName = "NotImplemented";           break;
+        }
+        std::println("[DLSS-RR] CreateFeature 실패: 0x{:08X} ({})", static_cast<uint32_t>(res), errName);
         std::println("[DLSS-RR] nvngx_dlssd.dll이 실행 파일과 같은 폴더에 있는지 확인");
         NVSDK_NGX_D3D12_DestroyParameters(m_params);
         m_params = nullptr;
@@ -275,7 +375,7 @@ void DLSSIntegration::RefreshTLASSRV(ID3D12Device* device,
 // ── UAVBarriers ───────────────────────────────────────────────────
 void DLSSIntegration::UAVBarriers(ID3D12GraphicsCommandList* cmdList)
 {
-    D3D12_RESOURCE_BARRIER barriers[5]{};
+    D3D12_RESOURCE_BARRIER barriers[7]{};
     barriers[0].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barriers[0].UAV.pResource = m_renderColor.Get();
     barriers[1].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -286,7 +386,11 @@ void DLSSIntegration::UAVBarriers(ID3D12GraphicsCommandList* cmdList)
     barriers[3].UAV.pResource = m_motionVec.Get();
     barriers[4].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barriers[4].UAV.pResource = m_renderNormal.Get();
-    cmdList->ResourceBarrier(5, barriers);
+    barriers[5].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barriers[5].UAV.pResource = m_diffuseAlbedo.Get();
+    barriers[6].Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barriers[6].UAV.pResource = m_specularAlbedo.Get();
+    cmdList->ResourceBarrier(7, barriers);
 }
 
 // ── Evaluate ──────────────────────────────────────────────────────
@@ -306,25 +410,32 @@ void DLSSIntegration::Evaluate(ID3D12GraphicsCommandList* cmdList,
         return b;
     };
 
-    // RR 입력: raw HDR 1spp (renderAccum), depth, motionVec, normals → SRV
-    D3D12_RESOURCE_BARRIER toSRV[4] = {
-        makeTransition(m_renderAccum.Get(),  D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-        makeTransition(m_depth.Get(),        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-        makeTransition(m_motionVec.Get(),    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-        makeTransition(m_renderNormal.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+    // RR 입력: raw HDR 1spp (renderAccum), depth, motionVec, normals, diffuse/specular albedo → SRV
+    D3D12_RESOURCE_BARRIER toSRV[6] = {
+        makeTransition(m_renderAccum.Get(),    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        makeTransition(m_depth.Get(),          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        makeTransition(m_motionVec.Get(),      D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        makeTransition(m_renderNormal.Get(),   D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        makeTransition(m_diffuseAlbedo.Get(),  D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        makeTransition(m_specularAlbedo.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
     };
-    cmdList->ResourceBarrier(4, toSRV);
+    cmdList->ResourceBarrier(6, toSRV);
 
-    // RR 파라미터: raw 1spp HDR(RGBA32F) + G-Buffer normals
+    // RR 파라미터: raw 1spp HDR(RGBA32F) + G-Buffer normals/diffuse/specular
     NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_Color,           m_renderAccum.Get());
     NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_Output,          m_dlssOutput.Get());
     NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_Depth,           m_depth.Get());
     NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_MotionVectors,   m_motionVec.Get());
     NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_GBuffer_Normals, m_renderNormal.Get());
+    // DLSS-RR 필수: 표면 albedo 분리 입력 (diffuse·specular)
+    NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_DiffuseAlbedo,   m_diffuseAlbedo.Get());
+    NVSDK_NGX_Parameter_SetD3d12Resource(m_params, NVSDK_NGX_Parameter_SpecularAlbedo,  m_specularAlbedo.Get());
     NVSDK_NGX_Parameter_SetF (m_params, NVSDK_NGX_Parameter_Jitter_Offset_X, jitterX);
     NVSDK_NGX_Parameter_SetF (m_params, NVSDK_NGX_Parameter_Jitter_Offset_Y, jitterY);
     NVSDK_NGX_Parameter_SetI (m_params, NVSDK_NGX_Parameter_Reset,    reset ? 1 : 0);
@@ -340,17 +451,21 @@ void DLSSIntegration::Evaluate(ID3D12GraphicsCommandList* cmdList,
         std::println("[DLSS-RR] Evaluate 실패: 0x{:08X}", static_cast<uint32_t>(res));
 
     // SRV → UAV 복원
-    D3D12_RESOURCE_BARRIER toUAV[4] = {
-        makeTransition(m_renderAccum.Get(),  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-        makeTransition(m_depth.Get(),        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-        makeTransition(m_motionVec.Get(),    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-        makeTransition(m_renderNormal.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+    D3D12_RESOURCE_BARRIER toUAV[6] = {
+        makeTransition(m_renderAccum.Get(),    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        makeTransition(m_depth.Get(),          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        makeTransition(m_motionVec.Get(),      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        makeTransition(m_renderNormal.Get(),   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        makeTransition(m_diffuseAlbedo.Get(),  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        makeTransition(m_specularAlbedo.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
     };
-    cmdList->ResourceBarrier(4, toUAV);
+    cmdList->ResourceBarrier(6, toUAV);
 }
 
 // ── CopyOutputToBackBuffer ────────────────────────────────────────

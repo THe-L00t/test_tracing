@@ -6,11 +6,11 @@
 //   Pass 1 (step=2, tonemap=0): ping            → pong
 //   Pass 2 (step=4, tonemap=1): pong            → g_output  (Reinhard + gamma)
 //
-// 엣지 스토핑: 색상 유사도(luminance 적응형) + NDC depth + oct-법선
+// 엣지 스토핑: 색상 유사도(luminance 적응형) + NDC depth + world-법선
 
 Texture2D<float4>    g_input   : register(t0);  // 노이즈 있는 HDR 입력
 Texture2D<float>     g_depth   : register(t1);  // NDC depth [0..1]
-Texture2D<float2>    g_normals : register(t2);  // oct-인코딩 월드 법선
+Texture2D<float4>    g_normals : register(t2);  // world-법선(xyz) + roughness(w) — DLSS-RR Packed 호환
 RWTexture2D<float4>  g_output  : register(u0);  // 디노이즈 출력
 
 cbuffer DenoiseCB : register(b0)
@@ -27,19 +27,6 @@ cbuffer DenoiseCB : register(b0)
 
 // A-trous 5탭 B3 스플라인 커널
 static const float k_h[5] = { 0.0625f, 0.25f, 0.375f, 0.25f, 0.0625f };
-
-// Oct-디코딩: float2 [-1,1]^2 → 단위 법선 float3
-float3 OctDecode(float2 f)
-{
-    float3 n = float3(f.x, f.y, 1.0f - abs(f.x) - abs(f.y));
-    if (n.z < 0.0f)
-    {
-        float x = n.x; float y = n.y;
-        n.x = (1.0f - abs(y)) * (x >= 0.0f ? 1.0f : -1.0f);
-        n.y = (1.0f - abs(x)) * (y >= 0.0f ? 1.0f : -1.0f);
-    }
-    return normalize(n);
-}
 
 // Reinhard 글로벌 톤맵 + 2.2 감마 보정
 float3 tonemap(float3 hdr)
@@ -64,12 +51,10 @@ float depthWeight(float d_c, float d_s)
     return exp(-diff * diff / (2.0f * g_sigmaDepth * g_sigmaDepth + 1e-6f));
 }
 
-// 법선 유사도 (1 - cos(angle): 0=동일, 1=직교)
-float normalWeight(float2 enc_c, float2 enc_s)
+// 법선 유사도 (1 - cos(angle): 0=동일, 1=직교) — world-space normal 직접 비교
+float normalWeight(float3 n_c, float3 n_s)
 {
-    float3 n_c = OctDecode(enc_c);
-    float3 n_s = OctDecode(enc_s);
-    float  diff = 1.0f - saturate(dot(n_c, n_s));
+    float diff = 1.0f - saturate(dot(n_c, n_s));
     return exp(-diff * diff / (2.0f * g_sigmaNormal * g_sigmaNormal + 1e-6f));
 }
 
@@ -81,7 +66,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     float4 center   = g_input.Load(int3(px, 0));
     float  d_center = g_depth.Load(int3(px, 0));
-    float2 n_center = g_normals.Load(int3(px, 0));
+    float3 n_center = g_normals.Load(int3(px, 0)).xyz;
 
     float4 sum  = float4(0.0f, 0.0f, 0.0f, 0.0f);
     float  wsum = 0.0f;
@@ -97,7 +82,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
             float4 s  = g_input.Load(int3(sp, 0));
             float  d  = g_depth.Load(int3(sp, 0));
-            float2 n  = g_normals.Load(int3(sp, 0));
+            float3 n  = g_normals.Load(int3(sp, 0)).xyz;
 
             float kw = k_h[dx + 2] * k_h[dy + 2];
             float cw = colorWeight(center.rgb, s.rgb);

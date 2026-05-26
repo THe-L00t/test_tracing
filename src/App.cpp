@@ -356,20 +356,27 @@ void App::BuildBLASes()
 
 // ---------------------------------------------------------------
 // 디스크립터 힙 구성 (일반 모드)
-// 슬롯 0: UAV u0 (g_output,       RGBA8   – RenderTarget::Init 내부)
-// 슬롯 1: UAV u1 (g_accumulation, RGBA32F – RenderTarget::Init 내부)
-// 슬롯 2: UAV u2 (g_depth,        R32_FLOAT  full-res — NDC depth)
-// 슬롯 3: UAV u3 (g_motionVec,    R16G16F    full-res — 비DLSS: oct-법선 / DLSS: 모션벡터)
-// 슬롯 4: UAV u4 (g_normals,      R16G16F    full-res — oct-법선 항상 기록, A-trous 공용)
-// 슬롯 5: SRV t0 (TLAS)
-// 슬롯 6: SRV t1 (plane VB)
-// 슬롯 7: SRV t2 (cube VB)
-// 슬롯 8: SRV t3 (room VB)
-// 슬롯 9: SRV t4 (sphere VB)
-// DLSS 모드 추가 슬롯 (DLSSIntegration::Init 에서 할당, 슬롯 10부터):
-// 슬롯10: UAV m_renderColor, 슬롯11: UAV m_renderAccum
-// 슬롯12: UAV m_depth,       슬롯13: UAV m_motionVec
-// 슬롯14: UAV m_renderNormal, 슬롯15: SRV TLAS 미러, 슬롯16-19: SRV VB 미러
+// 슬롯 0: UAV u0 (g_output,       RGBA8        – RenderTarget::Init 내부)
+// 슬롯 1: UAV u1 (g_accumulation, RGBA32F      – RenderTarget::Init 내부)
+// 슬롯 2: UAV u2 (g_depth,        R32_FLOAT       full-res — NDC depth)
+// 슬롯 3: UAV u3 (g_motionVec,    RGBA16F         full-res — 비DLSS: oct-법선+roughness / DLSS: 모션벡터)
+// 슬롯 4: UAV u4 (g_normals,      RGBA16F         full-res — world-법선(xyz)+roughness(w))
+// 슬롯 5: UAV u5 (g_diffAlbedo,   RGBA16F         full-res — DLSS-RR diffuse albedo)
+// 슬롯 6: UAV u6 (g_specAlbedo,   RGBA16F         full-res — DLSS-RR specular F0)
+// 슬롯 7: UAV u7 (g_diffRadHit,   RGBA16F         full-res — NRD diff radiance + hitDist)
+// 슬롯 8: UAV u8 (g_specRadHit,   RGBA16F         full-res — NRD spec radiance + hitDist)
+// 슬롯 9: UAV u9 (g_viewZ,        R16_FLOAT       full-res — NRD linear view Z)
+// 슬롯10: SRV t0 (TLAS)
+// 슬롯11: SRV t1 (plane VB)
+// 슬롯12: SRV t2 (cube VB)
+// 슬롯13: SRV t3 (room VB)
+// 슬롯14: SRV t4 (sphere VB)
+// DLSS 모드 추가 슬롯 (DLSSIntegration::Init 에서 할당, 슬롯 15부터):
+// 슬롯15: UAV m_renderColor, 슬롯16: UAV m_renderAccum
+// 슬롯17: UAV m_depth,       슬롯18: UAV m_motionVec
+// 슬롯19: UAV m_renderNormal, 슬롯20: UAV m_diffuseAlbedo, 슬롯21: UAV m_specularAlbedo
+// 슬롯22: UAV m_nrdDiffRad, 슬롯23: UAV m_nrdSpecRad, 슬롯24: UAV m_nrdViewZ
+// 슬롯25: SRV TLAS 미러, 슬롯26-29: SRV VB 미러
 // ---------------------------------------------------------------
 void App::BuildDescriptors()
 {
@@ -394,10 +401,20 @@ void App::BuildDescriptors()
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&res)));
         return res;
     };
-    if (!m_gbufferDepth)  m_gbufferDepth  = makeUAVTexFull(DXGI_FORMAT_R32_FLOAT,     m_width, m_height);
-    if (!m_gbufferNormal) m_gbufferNormal = makeUAVTexFull(DXGI_FORMAT_R16G16_FLOAT,  m_width, m_height);
-    m_gbufferDepth ->SetName(L"GBuffer_Depth");
-    m_gbufferNormal->SetName(L"GBuffer_Normal");
+    if (!m_gbufferDepth)      m_gbufferDepth      = makeUAVTexFull(DXGI_FORMAT_R32_FLOAT,           m_width, m_height);
+    if (!m_gbufferNormal)     m_gbufferNormal     = makeUAVTexFull(DXGI_FORMAT_R16G16B16A16_FLOAT, m_width, m_height);
+    if (!m_gbufferDiffAlbedo) m_gbufferDiffAlbedo = makeUAVTexFull(DXGI_FORMAT_R16G16B16A16_FLOAT, m_width, m_height);
+    if (!m_gbufferSpecAlbedo) m_gbufferSpecAlbedo = makeUAVTexFull(DXGI_FORMAT_R16G16B16A16_FLOAT, m_width, m_height);
+    if (!m_nrdDiffRadiance)   m_nrdDiffRadiance   = makeUAVTexFull(DXGI_FORMAT_R16G16B16A16_FLOAT, m_width, m_height);
+    if (!m_nrdSpecRadiance)   m_nrdSpecRadiance   = makeUAVTexFull(DXGI_FORMAT_R16G16B16A16_FLOAT, m_width, m_height);
+    if (!m_nrdViewZ)          m_nrdViewZ          = makeUAVTexFull(DXGI_FORMAT_R16_FLOAT,          m_width, m_height);
+    m_gbufferDepth     ->SetName(L"GBuffer_Depth");
+    m_gbufferNormal    ->SetName(L"GBuffer_Normal");
+    m_gbufferDiffAlbedo->SetName(L"GBuffer_DiffAlbedo");
+    m_gbufferSpecAlbedo->SetName(L"GBuffer_SpecAlbedo");
+    m_nrdDiffRadiance  ->SetName(L"NRD_DiffRadianceHitDist");
+    m_nrdSpecRadiance  ->SetName(L"NRD_SpecRadianceHitDist");
+    m_nrdViewZ         ->SetName(L"NRD_ViewZ");
 
     {
         DescriptorHandle h = heap.Allocate();  // slot 2
@@ -408,17 +425,47 @@ void App::BuildDescriptors()
     {
         DescriptorHandle h = heap.Allocate();  // slot 3
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        uav.Format = DXGI_FORMAT_R16G16_FLOAT;
+        uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
         device->CreateUnorderedAccessView(m_gbufferNormal.Get(), nullptr, &uav, h.cpu);
     }
     {
-        DescriptorHandle h = heap.Allocate();  // slot 4: u4 (g_normals) — 비DLSS oct-법선
+        DescriptorHandle h = heap.Allocate();  // slot 4: u4 (g_normals) — oct-법선(xy)+roughness(w)
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        uav.Format = DXGI_FORMAT_R16G16_FLOAT;
+        uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
         device->CreateUnorderedAccessView(m_gbufferNormal.Get(), nullptr, &uav, h.cpu);
     }
+    {
+        DescriptorHandle h = heap.Allocate();  // slot 5: u5 (g_diffAlbedo) — DLSS-RR diffuse albedo
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        device->CreateUnorderedAccessView(m_gbufferDiffAlbedo.Get(), nullptr, &uav, h.cpu);
+    }
+    {
+        DescriptorHandle h = heap.Allocate();  // slot 6: u6 (g_specAlbedo) — DLSS-RR specular F0
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        device->CreateUnorderedAccessView(m_gbufferSpecAlbedo.Get(), nullptr, &uav, h.cpu);
+    }
+    {
+        DescriptorHandle h = heap.Allocate();  // slot 7: u7 (g_diffRadHit) — NRD diff radiance + hitDist
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        device->CreateUnorderedAccessView(m_nrdDiffRadiance.Get(), nullptr, &uav, h.cpu);
+    }
+    {
+        DescriptorHandle h = heap.Allocate();  // slot 8: u8 (g_specRadHit) — NRD spec radiance + hitDist
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        device->CreateUnorderedAccessView(m_nrdSpecRadiance.Get(), nullptr, &uav, h.cpu);
+    }
+    {
+        DescriptorHandle h = heap.Allocate();  // slot 9: u9 (g_viewZ) — NRD linear view Z
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uav.Format = DXGI_FORMAT_R16_FLOAT;
+        device->CreateUnorderedAccessView(m_nrdViewZ.Get(), nullptr, &uav, h.cpu);
+    }
 
-    // 슬롯 5: SRV (TLAS)  ← 슬롯 0..4는 UAV
+    // 슬롯 10: SRV (TLAS)  ← 슬롯 0..9는 UAV
     m_tlasSRV = heap.Allocate();
     RebuildTLASSRV();
 
@@ -959,9 +1006,9 @@ void App::OnRender()
     if (m_dlssEnabled && m_dlss.IsAvailable())
     {
         // ── DLSS 경로 ─────────────────────────────────────────────
-        // 디스크립터 테이블 베이스를 힙 슬롯 10 으로 (render-res UAV u0..u4 + SRV 미러)
+        // 디스크립터 테이블 베이스를 힙 슬롯 15 으로 (render-res UAV u0..u9 + SRV 미러)
         cmd->SetComputeRootDescriptorTable(0,
-            m_core.CbvSrvUavHeap().GetHandle(10).gpu);
+            m_core.CbvSrvUavHeap().GetHandle(15).gpu);
 
         D3D12_DISPATCH_RAYS_DESC dr{};
         dr.RayGenerationShaderRecord = st.RayGenRange();
