@@ -125,6 +125,13 @@ struct alignas(16) SceneCB
     //   Phase 6 자체는 RT 셰이더에서 마커 계산만, 실제 reservoir reuse 는 Phase 7
     float    tierLow;             float    tierHigh;
     float    _pad3a;              float    _pad3b;
+
+    // Phase 7 — Spatial reservoir reuse (16)
+    //   reservoirEnabled : RT 셰이더가 reservoir UAV 에 쓰고, Tier 2/3 가 prev neighbor 를 읽어 RIS
+    //   reservoirReset   : 1=history 무시 (첫 frame / 씬 전환 / 큰 카메라 변화)
+    //   reservoirMCap    : M(샘플 수) 상한 — history 무한 증대 방지 (ghosting 완화)
+    uint32_t reservoirEnabled;    uint32_t reservoirReset;
+    uint32_t reservoirMCap;       uint32_t _pad4;
 };
-// 검증: 64+32+32+64+16+16+32+64+16+16 = 352
-static_assert(sizeof(SceneCB) == 352, "SceneCB must be 352 bytes");
+// 검증: 64+32+32+64+16+16+32+64+16+16+16 = 368
+static_assert(sizeof(SceneCB) == 368, "SceneCB must be 368 bytes");

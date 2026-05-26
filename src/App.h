@@ -105,6 +105,20 @@ private:
     static constexpr float   k_tierHigh = 0.70f;  // Î >  0.70 → Tier 1
     bool                     m_tierDebug = false;
 
+    // Phase 7 — Spatial Reservoir Reuse (Tier 2/3)
+    //   RGBA32_UINT render-res ping-pong. {dirOct, asuint(W), M, _flag}
+    //   m_reservoirReadIdx: 다음 frame 이 읽을 prev 버퍼 인덱스
+    //   F5 키로 reservoir reuse 강제 토글 (검증용, 기본 ON)
+    ComPtr<ID3D12Resource>   m_reservoir[2];
+    uint32_t                 m_reservoirReadIdx = 0u;
+    bool                     m_reservoirEnabled = true;          // F5 토글
+    bool                     m_reservoirNeedsReset = true;       // 첫 frame / 씬 전환 / 큰 카메라 변화
+    static constexpr uint32_t k_reservoirMCap = 16u;              // M 상한 (ghosting 완화)
+    // 비DLSS heap slot 10/11 (u10, u11) — 매 frame ping-pong 갱신.
+    // DLSS heap 의 미러는 DLSSIntegration::ReservoirIn/OutMirrorCPU() 가 제공.
+    DescriptorHandle         m_reservoirInUAVNonDLSS;
+    DescriptorHandle         m_reservoirOutUAVNonDLSS;
+
     // 이전 프레임 카메라 (모션벡터 계산용, UpdateSceneCB 끝에 갱신)
     float m_prevCamPos[3]     = {};
     float m_prevCamRight[3]   = {1,0,0};

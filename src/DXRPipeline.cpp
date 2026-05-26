@@ -84,13 +84,15 @@ namespace
 ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
 {
     // 파라미터 0: 디스크립터 테이블
-    //   Range 0: UAV 10개 (u0..u9) - 출력+누적+depth+motionVec+normals+diffAlbedo+specAlbedo
-    //                                + NRD: diffRadHit + specRadHit + viewZ
-    //   Range 1: SRV 5개 (t0..t4) - TLAS + VB 4개
+    //   Range 0: UAV 12개 (u0..u11)
+    //     - u0..u6: 출력+누적+depth+motionVec+normals+diffAlbedo+specAlbedo
+    //     - u7..u9: NRD diffRadHit + specRadHit + viewZ
+    //     - u10..u11: Phase 7 reservoirIn (prev frame) + reservoirOut (curr frame)
+    //   Range 1: SRV 6개 (t0..t5) - TLAS + VB 4개 + Phase 4 importance
     D3D12_DESCRIPTOR_RANGE1 ranges[2]{};
 
     ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    ranges[0].NumDescriptors                    = 10;  // u0-u9 (u7~u9: NRD inputs)
+    ranges[0].NumDescriptors                    = 12;  // u0..u11 (u10/u11: Phase 7 reservoir)
     ranges[0].BaseShaderRegister                = 0;
     ranges[0].RegisterSpace                     = 0;
     ranges[0].OffsetInDescriptorsFromTableStart = 0;
@@ -100,7 +102,7 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[1].NumDescriptors                    = 6;   // t0(TLAS) + t1..t4(VB×4) + t5(Phase 4 importance)
     ranges[1].BaseShaderRegister                = 0;
     ranges[1].RegisterSpace                     = 0;
-    ranges[1].OffsetInDescriptorsFromTableStart = 10;  // 힙 슬롯 10부터 (UAV 10개 다음)
+    ranges[1].OffsetInDescriptorsFromTableStart = 12;  // 힙 슬롯 12부터 (UAV 12개 다음)
     ranges[1].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     D3D12_ROOT_PARAMETER1 params[2]{};

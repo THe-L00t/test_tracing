@@ -37,6 +37,15 @@ RWTexture2D<float4>             g_diffRadianceHitDist : register(u7); // RGBA16F
 RWTexture2D<float4>             g_specRadianceHitDist : register(u8); // RGBA16F: rgb=spec radiance, w=hitDist
 RWTexture2D<float>              g_viewZ               : register(u9); // R16F  : linear view-space Z (primary)
 
+// HPAR-PT Phase 7 — Spatial Reservoir Reuse (RGBA32_UINT render-res ping-pong)
+//   .x = dirOct (2×16-bit oct-encoded first-bounce direction packed in u32)
+//   .y = asuint(W)          (RIS unbiased contribution weight W = w_sum / (M · p̂_chosen))
+//   .z = M                  (sample count, capped at reservoirMCap)
+//   .w = reserved (Phase 8 temporal flags)
+// reservoirEnabled = 0 인 비DLSS 모드에서는 접근 금지 (UAV 만 바인딩됨).
+RWTexture2D<uint4>              g_reservoirIn  : register(u10);   // 이전 frame 의 reservoir (읽기)
+RWTexture2D<uint4>              g_reservoirOut : register(u11);   // 현재 frame 의 reservoir (쓰기)
+
 RaytracingAccelerationStructure g_tlas         : register(t0);
 
 struct VertexPN { float3 pos; float3 normal; };
@@ -83,6 +92,13 @@ cbuffer SceneConstants : register(b0)
     //   Tier 1: full PT (현 동작)  Tier 2: partial reuse  Tier 3: aggressive reuse
     float  tierLow;        float  tierHigh;
     float  _pad3a;         float  _pad3b;
+
+    // Phase 7 — Spatial Reservoir Reuse
+    //   reservoirEnabled : 1 = reservoir 읽기/쓰기 활성 (DLSS 모드 + adaptive 활성)
+    //   reservoirReset   : 1 = prev frame 무시 (첫 frame / 씬 전환 / 큰 카메라 변화)
+    //   reservoirMCap    : M(샘플 수) 상한 — history 가 너무 커지지 않도록
+    uint   reservoirEnabled; uint reservoirReset;
+    uint   reservoirMCap;    uint _pad4;
 }
 
 // ── 상수 ────────────────────────────────────────────────────────
@@ -138,6 +154,72 @@ float2 OctEncode(float3 n)
     r.x = (o.z < 0.0f) ? ((1.0f - abs(o.y)) * (o.x >= 0.0f ? 1.0f : -1.0f)) : o.x;
     r.y = (o.z < 0.0f) ? ((1.0f - abs(o.x)) * (o.y >= 0.0f ? 1.0f : -1.0f)) : o.y;
     return r;
+}
+
+// ── Phase 7 — Reservoir 헬퍼 ────────────────────────────────────
+// 단위 방향 v → uint32 (2 × 16-bit oct, [0..65535] 양자화)
+uint OctPack32(float3 v)
+{
+    float2 e = OctEncode(v);             // [-1, 1]
+    uint2 q = uint2(saturate(e * 0.5f + 0.5f) * 65535.0f + 0.5f);
+    return (q.x & 0xFFFFu) | ((q.y & 0xFFFFu) << 16u);
+}
+float3 OctUnpack32(uint p)
+{
+    float2 q = float2(float(p & 0xFFFFu), float((p >> 16u) & 0xFFFFu));
+    float2 e = q / 65535.0f * 2.0f - 1.0f;   // [-1, 1]
+    float3 v = float3(e, 1.0f - abs(e.x) - abs(e.y));
+    if (v.z < 0.0f) v.xy = (1.0f - abs(v.yx)) * (v.xy >= 0.0f ? 1.0f : -1.0f);
+    return normalize(v);
+}
+
+struct Reservoir
+{
+    uint  dirOct;    // first-bounce direction (oct-packed)
+    float W;         // RIS unbiased weight = w_sum / (M · p̂_chosen)
+    uint  M;         // sample count (capped)
+};
+
+Reservoir EmptyReservoir()
+{
+    Reservoir r;
+    r.dirOct = 0u; r.W = 0.0f; r.M = 0u;
+    return r;
+}
+
+Reservoir LoadReservoir(uint2 px)
+{
+    uint4 v = g_reservoirIn.Load(int3((int2)px, 0));
+    Reservoir r;
+    r.dirOct = v.x;
+    r.W      = asfloat(v.y);
+    r.M      = v.z;
+    return r;
+}
+
+void StoreReservoir(uint2 px, Reservoir r)
+{
+    g_reservoirOut[px] = uint4(r.dirOct, asuint(r.W), r.M, 0u);
+}
+
+// p̂ : 우리 픽셀의 primary hit 에서 dir 방향의 target function 근사.
+//      |N·L| 만 사용 (간단·낮은 비용, ReSTIR DI 시점에선 unshadowed luminance 였음).
+float ReservoirTargetPdf(float3 N, float3 dir)
+{
+    return max(0.0f, dot(N, dir));
+}
+
+// 신규 sample 을 reservoir 에 weighted-replace 방식으로 결합 (WRS / RIS).
+//   w = p̂ · invSourcePdf · M_neighbor
+void UpdateReservoir(inout Reservoir r, uint dirOctNew, float p_hat, float w, inout uint seed, inout float wSum)
+{
+    if (w <= 0.0f) return;
+    r.M += 1u;
+    wSum += w;
+    if (RandFloat(seed) * wSum < w)
+    {
+        r.dirOct = dirOctNew;
+    }
 }
 
 // ── ONB (법선 기반 접선 공간) ────────────────────────────────────
@@ -489,12 +571,17 @@ void RayGen()
     //   R_i = R_min + (R_max - R_min) · Î^γ
     //   비DLSS 모드(adaptiveRayEnabled=0) 또는 importance 미할당 시 k_maxBounce 유지
     uint maxBounce = k_maxBounce;
+    // Phase 6 — Tier 분류 결과는 Phase 7 reservoir 분기에서 사용
+    uint primaryTier = 1u;
     if (adaptiveRayEnabled != 0u)
     {
         float I = g_importance.Load(int3((int2)idx, 0));
         float r = (float)rMin + ((float)rMax - (float)rMin) * pow(saturate(I), gamma);
         maxBounce = max(1u, (uint)round(r));
         maxBounce = min(maxBounce, k_maxBounce);  // hard upper bound 안전망
+
+        // Phase 6 tier (Tier 1 = full PT / Tier 2 = partial reuse / Tier 3 = aggressive reuse)
+        primaryTier = (I > tierHigh) ? 1u : ((I > tierLow) ? 2u : 3u);
     }
 
     for (uint bounce = 0u; bounce < maxBounce; bounce++)
@@ -594,7 +681,92 @@ void RayGen()
 
         if (payload.terminated != 0u) break;
 
-        throughput *= payload.attenuation;
+        // ── Phase 7 — Spatial Reservoir Reuse (bounce == 0, primary hit) ───
+        //   reservoir 는 "이 픽셀의 first-bounce direction" 을 RIS 로 결합 저장.
+        //   Tier 1 = write only (자체 샘플), Tier 2/3 = prev frame neighbor 와 RIS combine.
+        //   throughput 보정은 diffuse approximation (Lambertian) — Tier 2/3 = flat low-importance
+        //   영역으로 대부분 diffuse 라 bias 가 시각적으로 작다. Tier 1 (specular) 은 교체 없음.
+        if (bounce == 0u && reservoirEnabled != 0u)
+        {
+            // 자체 first-bounce 샘플 정보
+            float3 N      = payload.hitNormal;
+            float3 ownDir = payload.nextDirection;
+            float  ownPdf = max(payload.scatterPdf, 1e-6f);   // 0 = delta(유리) → 사실상 비활성
+            uint   ownOct = OctPack32(ownDir);
+            float  p_own  = ReservoirTargetPdf(N, ownDir);
+
+            // 초기 reservoir = own sample
+            Reservoir r;
+            r.dirOct = ownOct;
+            r.W      = 0.0f;
+            r.M      = 0u;
+            float wSum = 0.0f;
+            UpdateReservoir(r, ownOct, p_own, p_own / ownPdf, seed, wSum);
+
+            // Tier 2/3 + reservoirReset=0 + delta lobe 아님 + prev frame valid
+            bool doReuse = (primaryTier >= 2u) &&
+                           (reservoirReset == 0u) &&
+                           (payload.scatterPdf > 0.0f);
+            if (doReuse)
+            {
+                // Tier 2: 3×3 radius=1, 1 neighbor
+                // Tier 3: 5×5 radius=2, 3 neighbors
+                int  radius = (primaryTier == 2u) ? 1 : 2;
+                uint nCount = (primaryTier == 2u) ? 1u : 3u;
+                for (uint k = 0u; k < nCount; ++k)
+                {
+                    int2 off = int2(
+                        (int)(RandFloat(seed) * (float)(2 * radius + 1)) - radius,
+                        (int)(RandFloat(seed) * (float)(2 * radius + 1)) - radius);
+                    if (off.x == 0 && off.y == 0) continue;
+                    int2 npx = int2((int2)idx + off);
+                    int2 idim = int2((int2)dim);
+                    if (npx.x < 0 || npx.y < 0 || npx.x >= idim.x || npx.y >= idim.y) continue;
+
+                    Reservoir nbr = LoadReservoir((uint2)npx);
+                    if (nbr.M == 0u || nbr.W <= 0.0f) continue;
+
+                    float3 nbrDir = OctUnpack32(nbr.dirOct);
+                    float  p_nbr  = ReservoirTargetPdf(N, nbrDir);
+                    if (p_nbr <= 0.0f) continue;
+
+                    float w_n = p_nbr * nbr.W * (float)nbr.M;
+                    UpdateReservoir(r, nbr.dirOct, p_nbr, w_n, seed, wSum);
+                }
+            }
+
+            // M cap (history 무한 증대 방지)
+            r.M = min(r.M, reservoirMCap);
+
+            // 최종 W = w_sum / (M · p̂_chosen)
+            float3 chosenDir = OctUnpack32(r.dirOct);
+            float  p_chosen  = ReservoirTargetPdf(N, chosenDir);
+            r.W = (p_chosen > 0.0f && r.M > 0u) ? (wSum / ((float)r.M * p_chosen)) : 0.0f;
+
+            // 현재 frame reservoir 출력 (다음 frame 의 neighbor 가 읽음)
+            StoreReservoir(idx, r);
+
+            // 방향 교체: Tier 2/3 에서 chosen != own 일 때만 적용
+            //   diffuse approximation throughput 보정: albedo·(1-metallic)·NoL_chosen·W / π
+            //   (path tracer ClosestHit 의 풀 BRDF·MIS attenuation 을 단순 Lambertian 으로 대체)
+            //   ※ Tier 1 / glass / Tier 2-3 의 specular 영역에는 영향 없음 (else 분기로 own 유지)
+            bool chosenIsOwn = (r.dirOct == ownOct);
+            if (doReuse && !chosenIsOwn && r.W > 0.0f)
+            {
+                float NoL_c = saturate(dot(N, chosenDir));
+                float3 diffAlbedo = payload.hitAlbedo * (1.0f - payload.hitMetallic);
+                throughput *= diffAlbedo * NoL_c * r.W * INV_PI;
+                payload.nextDirection = chosenDir;
+            }
+            else
+            {
+                throughput *= payload.attenuation;  // 평소 경로 (Tier 1 또는 chosen == own)
+            }
+        }
+        else
+        {
+            throughput *= payload.attenuation;
+        }
 
         // Russian Roulette (bounce 3부터)
         if (bounce >= 3u)
