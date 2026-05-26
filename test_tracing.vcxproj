@@ -106,6 +106,7 @@
     <ClCompile Include="src\DLSSIntegration.cpp" />
     <ClCompile Include="src\NRDDenoiser.cpp" />
     <ClCompile Include="src\ImportanceMapPass.cpp" />
+    <ClCompile Include="src\ImportanceVisualizePass.cpp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -124,6 +125,7 @@
     <ClInclude Include="src\DLSSIntegration.h" />
     <ClInclude Include="src\NRDDenoiser.h" />
     <ClInclude Include="src\ImportanceMapPass.h" />
+    <ClInclude Include="src\ImportanceVisualizePass.h" />
   </ItemGroup>
 
   <ItemGroup>
@@ -132,6 +134,7 @@
     <None Include="shaders\SVGFTemporalAccum.hlsl" />
     <None Include="shaders\SVGFWavelet.hlsl" />
     <None Include="shaders\ImportanceMap.hlsl" />
+    <None Include="shaders\ImportanceVisualize.hlsl" />
   </ItemGroup>
 
   <!-- dxcompiler.dll / dxil.dll: DXR 런타임 셰이더 컴파일에 필요 -->

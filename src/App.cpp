@@ -330,6 +330,9 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
         //   Phase 1: E+D 만, F1 키로 디버그 시각화
         if (m_importanceMap.Init(m_core.Device(), m_dlss.RenderWidth(), m_dlss.RenderHeight()))
         {
+            // 시각화 패스 (importance R16F → display-res RGBA8 heatmap)
+            m_importanceVis.Init(m_core.Device(), width, height,
+                                 m_dlss.RenderWidth(), m_dlss.RenderHeight());
             std::println("[App] HPAR-PT Importance Map (Phase 1: E+D) 활성화 — F1 키로 시각화");
         }
     }
@@ -349,6 +352,7 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
 void App::Shutdown()
 {
     m_core.FlushGPU();
+    m_importanceVis.Shutdown();
     m_importanceMap.Shutdown();
     m_nrdDenoiser.Shutdown();
     m_dlss.Shutdown(m_core.Device());
@@ -942,6 +946,20 @@ void App::OnKeyDown(uint32_t key)
         else
             std::println("[App] A-trous 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
     }
+    else if (key == VK_F1)
+    {
+        // HPAR-PT Importance Map 디버그 시각화 토글
+        if (m_importanceMap.Resource())
+        {
+            m_importanceDebug = !m_importanceDebug;
+            std::println("[App] Importance Map 디버그 {}: 검정(낮음)→노랑(중간)→흰색(높음)",
+                         m_importanceDebug ? "ON" : "OFF");
+        }
+        else
+        {
+            std::println("[App] Importance Map 미초기화 (DLSS off?)");
+        }
+    }
     else if (key == 'U')
     {
         if (m_dlss.IsAvailable())
@@ -1051,13 +1069,42 @@ void App::OnRender()
             m_importanceMap.Apply(cmd, m_dlss.DepthResource(), m_dlss.RenderAccumResource());
         }
 
-        // DLSS-RR: AI 기반 denoising + temporal accumulation + upscaling 통합 1패스
-        // 입력: raw 1spp HDR(renderAccum), depth, motionVec, normals
-        m_dlss.Evaluate(cmd, m_dlssJitterX, m_dlssJitterY, dlssReset);
+        if (m_importanceDebug)
+        {
+            // 디버그 시각화 경로 — DLSS Evaluate 우회, importance heatmap 을 backbuffer 로 직접 copy
+            m_importanceVis.Apply(cmd, m_importanceMap.Resource());
 
-        ++m_dlssFrameIdx;
+            // m_importanceVis.OutputResource() (UAV) → backbuffer (PRESENT) 복사
+            D3D12_RESOURCE_BARRIER bars[2]{};
+            bars[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            bars[0].Transition.pResource   = m_importanceVis.OutputResource();
+            bars[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            bars[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            bars[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            bars[1] = bars[0];
+            bars[1].Transition.pResource   = m_core.BackBuffer();
+            bars[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            bars[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
+            cmd->ResourceBarrier(2, bars);
+            cmd->CopyResource(m_core.BackBuffer(), m_importanceVis.OutputResource());
+            bars[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            bars[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            bars[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            bars[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+            cmd->ResourceBarrier(2, bars);
 
-        m_dlss.CopyOutputToBackBuffer(cmd, m_core.BackBuffer());
+            ++m_dlssFrameIdx;
+        }
+        else
+        {
+            // DLSS-RR: AI 기반 denoising + temporal accumulation + upscaling 통합 1패스
+            // 입력: raw 1spp HDR(renderAccum), depth, motionVec, normals
+            m_dlss.Evaluate(cmd, m_dlssJitterX, m_dlssJitterY, dlssReset);
+
+            ++m_dlssFrameIdx;
+
+            m_dlss.CopyOutputToBackBuffer(cmd, m_core.BackBuffer());
+        }
     }
     else
     {
