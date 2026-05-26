@@ -8,6 +8,7 @@
 #include "Denoiser.h"
 #include "DLSSIntegration.h"
 #include "NRDDenoiser.h"
+#include "ImportanceMapPass.h"
 #include <chrono>
 
 class App
@@ -75,8 +76,10 @@ private:
     bool     m_denoiseEnabled = false;
 
     // DLSS
-    DLSSIntegration m_dlss;
-    NRDDenoiser     m_nrdDenoiser;
+    DLSSIntegration   m_dlss;
+    NRDDenoiser       m_nrdDenoiser;
+    ImportanceMapPass m_importanceMap;
+    bool              m_importanceDebug = false;  // F1 키로 토글 — importance map 시각화
 
     // 이전 프레임 카메라 (모션벡터 계산용, UpdateSceneCB 끝에 갱신)
     float m_prevCamPos[3]     = {};

@@ -325,6 +325,13 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
         {
             std::println("[App] NRD 디노이저 초기화 실패 — DLSS-RR 만 사용");
         }
+
+        // HPAR-PT Stage 2 (PASS 1) — Perceptual Importance Map
+        //   Phase 1: E+D 만, F1 키로 디버그 시각화
+        if (m_importanceMap.Init(m_core.Device(), m_dlss.RenderWidth(), m_dlss.RenderHeight()))
+        {
+            std::println("[App] HPAR-PT Importance Map (Phase 1: E+D) 활성화 — F1 키로 시각화");
+        }
     }
     else
     {
@@ -342,6 +349,7 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
 void App::Shutdown()
 {
     m_core.FlushGPU();
+    m_importanceMap.Shutdown();
     m_nrdDenoiser.Shutdown();
     m_dlss.Shutdown(m_core.Device());
     m_denoiser.Shutdown();
@@ -1033,6 +1041,15 @@ void App::OnRender()
 
         // RT 셰이더 쓰기 완료 보장 (renderColor, renderAccum, depth, motionVec, renderNormal)
         m_dlss.UAVBarriers(cmd);
+
+        // HPAR-PT Stage 2 (PASS 1) — Perceptual Importance Map
+        //   Phase 1: E (luminance gradient) + D (depth gradient) Sobel 3×3
+        //   Apply 가 m_depth/m_renderAccum 을 UAV→SRV→UAV transition 처리
+        //   현 프레임 PT 결과 사용 (다음 Phase 에서 prev-frame lag 또는 별도 입력으로 분리)
+        if (m_importanceMap.Resource())
+        {
+            m_importanceMap.Apply(cmd, m_dlss.DepthResource(), m_dlss.RenderAccumResource());
+        }
 
         // DLSS-RR: AI 기반 denoising + temporal accumulation + upscaling 통합 1패스
         // 입력: raw 1spp HDR(renderAccum), depth, motionVec, normals
