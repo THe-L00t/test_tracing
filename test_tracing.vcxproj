@@ -104,6 +104,7 @@
     <ClCompile Include="src\Denoiser.cpp" />
     <ClCompile Include="src\SVGFDenoiser.cpp" />
     <ClCompile Include="src\DLSSIntegration.cpp" />
+    <ClCompile Include="src\NRDDenoiser.cpp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -120,6 +121,7 @@
     <ClInclude Include="src\Denoiser.h" />
     <ClInclude Include="src\SVGFDenoiser.h" />
     <ClInclude Include="src\DLSSIntegration.h" />
+    <ClInclude Include="src\NRDDenoiser.h" />
   </ItemGroup>
 
   <ItemGroup>
