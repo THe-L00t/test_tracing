@@ -216,12 +216,14 @@ float ReservoirTargetPdf(float3 N, float3 dir)
     return max(0.0f, dot(N, dir));
 }
 
-// 신규 sample 을 reservoir 에 weighted-replace 방식으로 결합 (WRS / RIS).
-//   w = p̂ · invSourcePdf · M_neighbor
-void UpdateReservoir(inout Reservoir r, uint dirOctNew, float p_hat, float w, inout uint seed, inout float wSum)
+// ── WRS update (Bitterli 2020 Algorithm 2) ─────────────────────
+//   M_inc : 이 sample 이 대표하는 관측 횟수 (own = 1, neighbor reservoir = n.M)
+//   w     : importance weight (own: p̂/pdf, neighbor: p̂·n.W·n.M)
+void UpdateReservoir(inout Reservoir r, uint dirOctNew, uint M_inc, float w,
+                     inout uint seed, inout float wSum)
 {
     if (w <= 0.0f) return;
-    r.M += 1u;
+    r.M += M_inc;
     wSum += w;
     if (RandFloat(seed) * wSum < w)
     {
@@ -686,14 +688,26 @@ void RayGen()
             nrdFirstBounceHitDist = payload.firstBounceHitDist;
         }
 
-        if (payload.terminated != 0u) break;
-
         // ── Phase 7 — Spatial Reservoir Reuse (bounce == 0, primary hit) ───
-        //   reservoir 는 "이 픽셀의 first-bounce direction" 을 RIS 로 결합 저장.
+        //   ※ terminated / delta lobe (유리, scatterPdf=0) 픽셀은 reservoir 무효화 처리.
+        //      안 그러면 다음 frame 이웃이 garbage 또는 1/eps 폭주값 읽음.
         //   Tier 1 = write only (자체 샘플), Tier 2/3 = prev frame neighbor 와 RIS combine.
         //   throughput 보정은 diffuse approximation (Lambertian) — Tier 2/3 = flat low-importance
         //   영역으로 대부분 diffuse 라 bias 가 시각적으로 작다. Tier 1 (specular) 은 교체 없음.
-        if (bounce == 0u && reservoirEnabled != 0u)
+        bool primaryReservoirValid = (bounce == 0u) &&
+                                     (reservoirEnabled != 0u) &&
+                                     (payload.terminated == 0u) &&
+                                     (payload.scatterPdf > 0.0f);
+        if (bounce == 0u && reservoirEnabled != 0u && !primaryReservoirValid)
+        {
+            // emissive 직격 / miss / 유리 등 → reservoir 무효화 (M=0)
+            //   다음 frame 이웃이 이 픽셀 읽어도 `nbr.M==0` 분기에서 스킵.
+            StoreReservoir(idx, EmptyReservoir());
+        }
+
+        if (payload.terminated != 0u) break;
+
+        if (primaryReservoirValid)
         {
             // 자체 first-bounce 샘플 정보
             float3 N      = payload.hitNormal;
@@ -702,13 +716,14 @@ void RayGen()
             uint   ownOct = OctPack32(ownDir);
             float  p_own  = ReservoirTargetPdf(N, ownDir);
 
-            // 초기 reservoir = own sample
+            // 초기 reservoir = own sample (Bitterli 2020 Algorithm 5 / 6)
+            //   own: M_inc=1, w = p̂_own / pdf_own
             Reservoir r;
             r.dirOct = ownOct;
             r.W      = 0.0f;
             r.M      = 0u;
             float wSum = 0.0f;
-            UpdateReservoir(r, ownOct, p_own, p_own / ownPdf, seed, wSum);
+            UpdateReservoir(r, ownOct, 1u, p_own / ownPdf, seed, wSum);
 
             // Tier 2/3 + reservoirReset=0 + delta lobe 아님 + prev frame valid
             bool doReuse = (primaryTier >= 2u) &&
@@ -737,18 +752,21 @@ void RayGen()
                     float  p_nbr  = ReservoirTargetPdf(N, nbrDir);
                     if (p_nbr <= 0.0f) continue;
 
+                    // CombineReservoir: M_inc = nbr.M, w = p̂_at_us · nbr.W · nbr.M
                     float w_n = p_nbr * nbr.W * (float)nbr.M;
-                    UpdateReservoir(r, nbr.dirOct, p_nbr, w_n, seed, wSum);
+                    UpdateReservoir(r, nbr.dirOct, nbr.M, w_n, seed, wSum);
                 }
             }
 
-            // M cap (history 무한 증대 방지)
-            r.M = min(r.M, reservoirMCap);
-
-            // 최종 W = w_sum / (M · p̂_chosen)
+            // 최종 W = w_sum / (M · p̂_chosen) — capping 전 uncapped M 사용해야 estimator 수렴
             float3 chosenDir = OctUnpack32(r.dirOct);
             float  p_chosen  = ReservoirTargetPdf(N, chosenDir);
             r.W = (p_chosen > 0.0f && r.M > 0u) ? (wSum / ((float)r.M * p_chosen)) : 0.0f;
+
+            // 저장 직전 M cap (history 무한 증대 방지)
+            //   다음 frame neighbor 가 nbr.M 으로 곱셈할 때 폭주 방지.
+            //   W 는 이미 계산됐으므로 cap 의 영향 없음 (Bitterli 2020 권장).
+            r.M = min(r.M, reservoirMCap);
 
             // 현재 frame reservoir 출력 (다음 frame 의 neighbor 가 읽음)
             StoreReservoir(idx, r);
