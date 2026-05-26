@@ -112,7 +112,12 @@ struct alignas(16) SceneCB
     float    prevCamPos[3];       uint32_t isDLSSMode;
     float    prevCamRight[3];     float    prevTanHalfFovY;
     float    prevCamUp[3];        float    prevAspectRatio;
-    float    prevCamForward[3];   float    _pad1;
+    float    prevCamForward[3];   uint32_t adaptiveRayEnabled;  // Phase 4: 0=off, 1=on (per-pixel from Î)
+
+    // Phase 4 — Adaptive Ray Allocation (16)
+    //   R_i = R_min + (R_max - R_min) · Î^γ
+    uint32_t rMin;                uint32_t rMax;
+    float    gamma;               float    _pad2;
 };
-// 검증: 64+32+32+64+16+16+32+64 = 320
-static_assert(sizeof(SceneCB) == 320, "SceneCB must be 320 bytes");
+// 검증: 64+32+32+64+16+16+32+64+16 = 336
+static_assert(sizeof(SceneCB) == 336, "SceneCB must be 336 bytes");

@@ -59,6 +59,8 @@ private:
     DescriptorHandle m_cubeVbSRV;
     DescriptorHandle m_roomVbSRV;
     DescriptorHandle m_sphereVbSRV;
+    DescriptorHandle m_importanceSrvNonDLSS;  // Phase 4: slot 15, smooth importance → 매 frame 갱신
+    DescriptorHandle m_importanceSrvDLSS;     // Phase 4: DLSS heap slot, smooth importance → 매 frame 갱신
 
     // 씬 상수 버퍼 (업로드 힙, 256바이트, 매 프레임 기록)
     ComPtr<ID3D12Resource> m_sceneCB;

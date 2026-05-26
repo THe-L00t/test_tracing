@@ -313,6 +313,7 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
                     m_sphereBLAS.VertexBuffer(), m_sphereBLAS.VertexCount()))
     {
         m_dlssEnabled = true;
+        m_importanceSrvDLSS.cpu = m_dlss.ImportanceMirrorCPU();  // Phase 4: 매 frame importance SRV 갱신용
         std::println("[App] DLSS 기본 활성화 — U 키로 토글");
 
         // NRD 디노이저 초기화 (DLSS 렌더 해상도 기준)
@@ -379,28 +380,30 @@ void App::BuildBLASes()
 }
 
 // ---------------------------------------------------------------
-// 디스크립터 힙 구성 (일반 모드)
-// 슬롯 0: UAV u0 (g_output,       RGBA8        – RenderTarget::Init 내부)
-// 슬롯 1: UAV u1 (g_accumulation, RGBA32F      – RenderTarget::Init 내부)
-// 슬롯 2: UAV u2 (g_depth,        R32_FLOAT       full-res — NDC depth)
-// 슬롯 3: UAV u3 (g_motionVec,    RGBA16F         full-res — 비DLSS: oct-법선+roughness / DLSS: 모션벡터)
-// 슬롯 4: UAV u4 (g_normals,      RGBA16F         full-res — world-법선(xyz)+roughness(w))
-// 슬롯 5: UAV u5 (g_diffAlbedo,   RGBA16F         full-res — DLSS-RR diffuse albedo)
-// 슬롯 6: UAV u6 (g_specAlbedo,   RGBA16F         full-res — DLSS-RR specular F0)
-// 슬롯 7: UAV u7 (g_diffRadHit,   RGBA16F         full-res — NRD diff radiance + hitDist)
-// 슬롯 8: UAV u8 (g_specRadHit,   RGBA16F         full-res — NRD spec radiance + hitDist)
-// 슬롯 9: UAV u9 (g_viewZ,        R16_FLOAT       full-res — NRD linear view Z)
+// 디스크립터 힙 구성 (일반 모드, Phase 4)
+// 슬롯 0: UAV u0 (g_output)        RGBA8       (RenderTarget::Init)
+// 슬롯 1: UAV u1 (g_accumulation)  RGBA32F     (RenderTarget::Init)
+// 슬롯 2: UAV u2 (g_depth)         R32_FLOAT    full-res NDC depth
+// 슬롯 3: UAV u3 (g_motionVec)     RGBA16F      비DLSS/DLSS 공용
+// 슬롯 4: UAV u4 (g_normals)       RGBA16F      world-법선+roughness
+// 슬롯 5: UAV u5 (g_diffAlbedo)    RGBA16F      DLSS-RR diffuse albedo
+// 슬롯 6: UAV u6 (g_specAlbedo)    RGBA16F      DLSS-RR specular F0
+// 슬롯 7: UAV u7 (g_diffRadHit)    RGBA16F      NRD diff radiance + hitDist
+// 슬롯 8: UAV u8 (g_specRadHit)    RGBA16F      NRD spec radiance + hitDist
+// 슬롯 9: UAV u9 (g_viewZ)         R16_FLOAT    NRD linear view Z
 // 슬롯10: SRV t0 (TLAS)
 // 슬롯11: SRV t1 (plane VB)
 // 슬롯12: SRV t2 (cube VB)
 // 슬롯13: SRV t3 (room VB)
 // 슬롯14: SRV t4 (sphere VB)
-// DLSS 모드 추가 슬롯 (DLSSIntegration::Init 에서 할당, 슬롯 15부터):
-// 슬롯15: UAV m_renderColor, 슬롯16: UAV m_renderAccum
-// 슬롯17: UAV m_depth,       슬롯18: UAV m_motionVec
-// 슬롯19: UAV m_renderNormal, 슬롯20: UAV m_diffuseAlbedo, 슬롯21: UAV m_specularAlbedo
-// 슬롯22: UAV m_nrdDiffRad, 슬롯23: UAV m_nrdSpecRad, 슬롯24: UAV m_nrdViewZ
-// 슬롯25: SRV TLAS 미러, 슬롯26-29: SRV VB 미러
+// 슬롯15: SRV t5 (Phase 4 importance smooth, R16F) — 매 frame ping-pong 갱신
+// DLSS 모드 추가 슬롯 (DLSSIntegration::Init 에서 할당, 슬롯 16부터):
+// 슬롯16: UAV m_renderColor,  17: UAV m_renderAccum
+// 슬롯18: UAV m_depth,        19: UAV m_motionVec
+// 슬롯20: UAV m_renderNormal, 21: UAV m_diffuseAlbedo, 22: UAV m_specularAlbedo
+// 슬롯23: UAV m_nrdDiffRad,   24: UAV m_nrdSpecRad,    25: UAV m_nrdViewZ
+// 슬롯26: SRV TLAS 미러, 27-30: SRV VB 미러
+// 슬롯31: SRV t5 importance (Phase 4)
 // ---------------------------------------------------------------
 void App::BuildDescriptors()
 {
@@ -543,6 +546,19 @@ void App::BuildDescriptors()
         srvDesc.Buffer.StructureByteStride = sizeof(VertexPN);
         srvDesc.Buffer.Flags               = D3D12_BUFFER_SRV_FLAG_NONE;
         device->CreateShaderResourceView(m_sphereBLAS.VertexBuffer(), &srvDesc, m_sphereVbSRV.cpu);
+    }
+
+    // 슬롯 15: SRV t5 — Phase 4 Importance smooth (R16F)
+    //   매 frame ping-pong 으로 Resource() 가 바뀌므로 Render() 에서 SRV 재작성.
+    //   Init 시점엔 null SRV (DLSS init 실패 시에도 root sig 매칭은 OK).
+    m_importanceSrvNonDLSS = heap.Allocate();
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Format        = DXGI_FORMAT_R16_FLOAT;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels = 1;
+        device->CreateShaderResourceView(nullptr, &srv, m_importanceSrvNonDLSS.cpu);
     }
 }
 
@@ -911,6 +927,14 @@ void App::UpdateSceneCB()
     cb.prevAspectRatio  = m_prevAspectRatio;
     std::memcpy(cb.prevCamForward, m_prevCamForward, sizeof(float) * 3);
 
+    // Phase 4 — Adaptive Ray Allocation
+    //   importance smooth 가 DLSS 모드에서만 매 frame 계산되므로 DLSS 활성 시에만 on
+    cb.adaptiveRayEnabled = (m_dlssEnabled && m_dlss.IsAvailable() && m_importanceMap.Resource()) ? 1u : 0u;
+    cb.rMin  = 1u;
+    cb.rMax  = 8u;
+    cb.gamma = 1.0f;
+    cb._pad2 = 0.0f;
+
     // 현재 카메라를 다음 프레임의 "이전 카메라"로 저장
     std::memcpy(m_prevCamPos,     pos,     sizeof(float) * 3);
     std::memcpy(m_prevCamRight,   right,   sizeof(float) * 3);
@@ -1054,12 +1078,27 @@ void App::OnRender()
 
     const auto& st = m_pipeline.GetShaderTable();
 
+    // Phase 4 — Importance SRV (t5) 매 frame 갱신 (ping-pong 으로 Resource() 바뀜)
+    //   importance map 이 아직 초기화 안 됐으면 (DLSS init 실패) null SRV 유지
+    if (m_importanceMap.Resource() != nullptr)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.ViewDimension       = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Format              = DXGI_FORMAT_R16_FLOAT;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels = 1;
+        m_core.Device()->CreateShaderResourceView(m_importanceMap.Resource(), &srv, m_importanceSrvNonDLSS.cpu);
+        if (m_importanceSrvDLSS.cpu.ptr != 0)
+            m_core.Device()->CreateShaderResourceView(m_importanceMap.Resource(), &srv, m_importanceSrvDLSS.cpu);
+    }
+
     if (m_dlssEnabled && m_dlss.IsAvailable())
     {
         // ── DLSS 경로 ─────────────────────────────────────────────
-        // 디스크립터 테이블 베이스를 힙 슬롯 15 으로 (render-res UAV u0..u9 + SRV 미러)
+        // 디스크립터 테이블 베이스를 힙 슬롯 16 으로 (render-res UAV u0..u9 + SRV 미러)
+        //   비DLSS 의 슬롯 15(importance SRV) 가 추가되어 DLSS 진입은 16 으로 shift
         cmd->SetComputeRootDescriptorTable(0,
-            m_core.CbvSrvUavHeap().GetHandle(15).gpu);
+            m_core.CbvSrvUavHeap().GetHandle(16).gpu);
 
         D3D12_DISPATCH_RAYS_DESC dr{};
         dr.RayGenerationShaderRecord = st.RayGenRange();

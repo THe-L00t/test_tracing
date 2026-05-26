@@ -45,6 +45,10 @@ StructuredBuffer<VertexPN> g_vbCube    : register(t2);
 StructuredBuffer<VertexPN> g_vbRoom    : register(t3);
 StructuredBuffer<VertexPN> g_vbSphere  : register(t4);
 
+// HPAR-PT Phase 4 — Perceptual Importance smooth output (R16F)
+//   adaptiveRayEnabled=0 인 비DLSS 모드에서는 사용 안 함 (stale 값 OK).
+Texture2D<float>           g_importance : register(t5);
+
 cbuffer SceneConstants : register(b0)
 {
     float3 camPos;       uint   sceneID;
@@ -68,7 +72,11 @@ cbuffer SceneConstants : register(b0)
     float3 prevCamPos;     uint   isDLSSMode;
     float3 prevCamRight;   float  prevTanHalfFovY;
     float3 prevCamUp;      float  prevAspectRatio;
-    float3 prevCamForward; float  _pad1;
+    float3 prevCamForward; uint   adaptiveRayEnabled;  // Phase 4
+
+    // Phase 4 — Adaptive Ray Allocation
+    uint   rMin;           uint   rMax;
+    float  gamma;          float  _pad2;
 }
 
 // ── 상수 ────────────────────────────────────────────────────────
@@ -471,7 +479,19 @@ void RayGen()
     float  nrdFirstBounceHitDist = 0.0f;
     float  nrdViewZ              = 0.0f;
 
-    for (uint bounce = 0u; bounce < k_maxBounce; bounce++)
+    // Phase 4 — Adaptive Ray Allocation: per-pixel maxBounce 결정
+    //   R_i = R_min + (R_max - R_min) · Î^γ
+    //   비DLSS 모드(adaptiveRayEnabled=0) 또는 importance 미할당 시 k_maxBounce 유지
+    uint maxBounce = k_maxBounce;
+    if (adaptiveRayEnabled != 0u)
+    {
+        float I = g_importance.Load(int3((int2)idx, 0));
+        float r = (float)rMin + ((float)rMax - (float)rMin) * pow(saturate(I), gamma);
+        maxBounce = max(1u, (uint)round(r));
+        maxBounce = min(maxBounce, k_maxBounce);  // hard upper bound 안전망
+    }
+
+    for (uint bounce = 0u; bounce < maxBounce; bounce++)
     {
         RayPayload payload;
         payload.emission      = float3(0.0f, 0.0f, 0.0f);

@@ -171,7 +171,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     // 리소스 포인터로 SRV를 직접 생성한다.
     // 비DLSS 슬롯 0..9 선점 후 → DLSS는 슬롯 10부터 시작
 
-    // 슬롯 10: UAV m_renderColor (u0)
+    // 슬롯 16: UAV m_renderColor (u0)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -179,7 +179,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R8G8B8A8_UNORM;
         device->CreateUnorderedAccessView(m_renderColor.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 11: UAV m_renderAccum (u1)
+    // 슬롯 17: UAV m_renderAccum (u1)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -187,7 +187,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R32G32B32A32_FLOAT;
         device->CreateUnorderedAccessView(m_renderAccum.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 12: UAV m_depth (u2)
+    // 슬롯 18: UAV m_depth (u2)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -195,7 +195,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R32_FLOAT;
         device->CreateUnorderedAccessView(m_depth.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 13: UAV m_motionVec (u3)
+    // 슬롯 19: UAV m_motionVec (u3)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -203,7 +203,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R16G16_FLOAT;
         device->CreateUnorderedAccessView(m_motionVec.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 16: UAV m_renderNormal (u4, oct-법선 xy + roughness w — DLSS-RR Packed + A-trous 공용)
+    // 슬롯 20: UAV m_renderNormal (u4, world-법선 xyz + roughness w — DLSS-RR + A-trous 공용)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -211,7 +211,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
         device->CreateUnorderedAccessView(m_renderNormal.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 17: UAV m_diffuseAlbedo (u5, DLSS-RR DiffuseAlbedo)
+    // 슬롯 21: UAV m_diffuseAlbedo (u5, DLSS-RR DiffuseAlbedo)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -219,7 +219,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
         device->CreateUnorderedAccessView(m_diffuseAlbedo.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 21: UAV m_specularAlbedo (u6, DLSS-RR SpecularAlbedo F0)
+    // 슬롯 22: UAV m_specularAlbedo (u6, DLSS-RR SpecularAlbedo F0)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -227,7 +227,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
         device->CreateUnorderedAccessView(m_specularAlbedo.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 22: UAV m_nrdDiffRadiance (u7, NRD diff radiance + hitDist)
+    // 슬롯 23: UAV m_nrdDiffRadiance (u7, NRD diff radiance + hitDist)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -235,7 +235,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
         device->CreateUnorderedAccessView(m_nrdDiffRadiance.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 23: UAV m_nrdSpecRadiance (u8, NRD spec radiance + hitDist)
+    // 슬롯 24: UAV m_nrdSpecRadiance (u8, NRD spec radiance + hitDist)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -243,7 +243,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
         device->CreateUnorderedAccessView(m_nrdSpecRadiance.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 24: UAV m_nrdViewZ (u9, NRD linear view Z)
+    // 슬롯 25: UAV m_nrdViewZ (u9, NRD linear view Z)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -251,7 +251,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R16_FLOAT;
         device->CreateUnorderedAccessView(m_nrdViewZ.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 25: SRV TLAS 미러
+    // 슬롯 26: SRV TLAS 미러
     {
         DescriptorHandle h = sharedHeap.Allocate();
         m_tlasMirrorCPU = h.cpu;
@@ -278,6 +278,19 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     makeVbSRV(cubeVb,   cubeVertCount);
     makeVbSRV(roomVb,   roomVertCount);
     makeVbSRV(sphereVb, sphereVertCount);
+
+    // Phase 4 — SRV t5 importance (R16F, render-res). 매 frame App 이 갱신.
+    //   Init 시점엔 null SRV 로 자리만 잡음.
+    {
+        DescriptorHandle h = sharedHeap.Allocate();
+        m_importanceMirrorCPU = h.cpu;
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Format        = DXGI_FORMAT_R16_FLOAT;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels = 1;
+        device->CreateShaderResourceView(nullptr, &srvDesc, h.cpu);
+    }
 
     // ── 5. DLSS Ray Reconstruction 피처 생성 (RR 전용, 폴백 없음) ──
     // 입력: raw 1spp HDR (m_renderAccum RGBA32F) + depth + MV + normals

@@ -97,7 +97,7 @@ ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
     ranges[0].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     ranges[1].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    ranges[1].NumDescriptors                    = 5;   // t0(TLAS) + t1(plane) + t2(cube) + t3(room) + t4(sphere)
+    ranges[1].NumDescriptors                    = 6;   // t0(TLAS) + t1..t4(VB×4) + t5(Phase 4 importance)
     ranges[1].BaseShaderRegister                = 0;
     ranges[1].RegisterSpace                     = 0;
     ranges[1].OffsetInDescriptorsFromTableStart = 10;  // 힙 슬롯 10부터 (UAV 10개 다음)
