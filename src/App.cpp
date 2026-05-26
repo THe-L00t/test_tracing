@@ -568,6 +568,7 @@ void App::SwitchScene(uint32_t id)
     m_frameCount  = 0;
     m_cameraMoved = true;
     m_accumDirty  = true;  // 씬 내용이 바뀌므로 누적 버퍼 클리어 필요
+    m_importanceMap.ResetHistory();  // HPAR-PT Phase 3: importance EMA history 무효화
 
     // GPU 완전 대기
     m_core.FlushGPU();

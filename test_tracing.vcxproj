@@ -138,6 +138,7 @@
     <None Include="shaders\ImportanceVisualize.hlsl" />
     <None Include="shaders\MetricHistogram.hlsl" />
     <None Include="shaders\MetricReduce.hlsl" />
+    <None Include="shaders\ImportanceEMA.hlsl" />
   </ItemGroup>
 
   <!-- dxcompiler.dll / dxil.dll: DXR 런타임 셰이더 컴파일에 필요 -->
