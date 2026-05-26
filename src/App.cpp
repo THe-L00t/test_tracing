@@ -1269,10 +1269,11 @@ void App::OnRender()
 
                 // R_max 동적 조절: target_ms 대비 비율로 baseRMax(8) 스케일
                 //   기본 target = 16ms (60fps). F3 으로 1ms 토글 시 강제 R_max 감소 (검증용).
+                //   R_min(=4) 이하로는 떨어지지 않도록 보장 (lerp 역전 방지).
                 const float compensation = m_dftcTargetMs / (m_gpuMsEMA > 1.0f ? m_gpuMsEMA : 1.0f);
                 const float adjusted     = 8.0f * compensation;
                 uint32_t r = (uint32_t)(adjusted + 0.5f);
-                if (r < 2u) r = 2u;
+                if (r < 4u) r = 4u;   // R_min=4 보장 (lerp(R_min, R_max, Î) 순서 유지)
                 if (r > 8u) r = 8u;
                 m_currentRMax = r;
             }
