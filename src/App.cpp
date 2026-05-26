@@ -929,8 +929,11 @@ void App::UpdateSceneCB()
 
     // Phase 4 — Adaptive Ray Allocation
     //   importance smooth 가 DLSS 모드에서만 매 frame 계산되므로 DLSS 활성 시에만 on
+    //   R_min = 4 (safe baseline) — Phase 7 reservoir reuse 추가 후 1까지 낮춤 가능.
+    //   현재 R_min=1 로 두면 유리/반투명 픽셀이 refracted ray 부족으로 검정,
+    //   flat 벽은 GI 한 번뿐이라 firefly noise.
     cb.adaptiveRayEnabled = (m_dlssEnabled && m_dlss.IsAvailable() && m_importanceMap.Resource()) ? 1u : 0u;
-    cb.rMin  = 1u;
+    cb.rMin  = 4u;
     cb.rMax  = 8u;
     cb.gamma = 1.0f;
     cb._pad2 = 0.0f;
