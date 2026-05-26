@@ -1,67 +1,17 @@
 #include "ImportanceMapPass.h"
-#include <d3dcompiler.h>
+#include "ShaderCompile.h"
 #include <print>
-#include <filesystem>
 
-#pragma comment(lib, "dxcompiler.lib")
-#include <dxcapi.h>
-
-// CB 레이아웃 (16-byte aligned, 256-byte 정렬은 D3D12 에서 강제)
+// CB 레이아웃 — D3D12 가 CBV 를 256B 정렬로 요구
 struct ImportanceCB
 {
     uint32_t width;
     uint32_t height;
     float    weightE;
     float    weightD;
-    float    _pad[60];  // 256B 정렬
+    float    _pad[60];
 };
 static_assert(sizeof(ImportanceCB) == 256, "ImportanceCB must be 256-byte aligned");
-
-static ComPtr<IDxcBlob> CompileShader(const wchar_t* path, const wchar_t* entry, const wchar_t* target)
-{
-    ComPtr<IDxcUtils> utils;
-    ComPtr<IDxcCompiler3> compiler;
-    ThrowIfFailed(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)));
-    ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler)));
-
-    ComPtr<IDxcIncludeHandler> includeHandler;
-    utils->CreateDefaultIncludeHandler(&includeHandler);
-
-    ComPtr<IDxcBlobEncoding> sourceBlob;
-    ThrowIfFailed(utils->LoadFile(path, nullptr, &sourceBlob));
-    DxcBuffer source{};
-    source.Ptr      = sourceBlob->GetBufferPointer();
-    source.Size     = sourceBlob->GetBufferSize();
-    source.Encoding = DXC_CP_ACP;
-
-    LPCWSTR args[] = {
-        L"-E", entry,
-        L"-T", target,
-        L"-Zi",
-        L"-Qembed_debug",
-    };
-    ComPtr<IDxcResult> result;
-    ThrowIfFailed(compiler->Compile(&source, args, _countof(args), includeHandler.Get(), IID_PPV_ARGS(&result)));
-
-    ComPtr<IDxcBlobUtf8> errors;
-    result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr);
-    if (errors && errors->GetStringLength() > 0)
-    {
-        std::println("[ImportanceMap] 셰이더 컴파일 메시지: {}", (const char*)errors->GetBufferPointer());
-    }
-
-    HRESULT status;
-    result->GetStatus(&status);
-    if (FAILED(status))
-    {
-        std::println("[ImportanceMap] 셰이더 컴파일 실패: 0x{:08X}", (uint32_t)status);
-        return nullptr;
-    }
-
-    ComPtr<IDxcBlob> shader;
-    result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shader), nullptr);
-    return shader;
-}
 
 bool ImportanceMapPass::Init(ID3D12Device* device, uint32_t width, uint32_t height)
 {
@@ -132,8 +82,7 @@ bool ImportanceMapPass::Init(ID3D12Device* device, uint32_t width, uint32_t heig
 
     // ── 3. 컴퓨트 PSO ─────────────────────────────────────────────
     {
-        // DXRPipeline 과 동일한 패턴: 작업 디렉토리 기준 상대 경로
-        auto blob = CompileShader(L"shaders/ImportanceMap.hlsl", L"main", L"cs_6_0");
+        auto blob = CompileComputeCS(L"shaders/ImportanceMap.hlsl");
         if (!blob)
         {
             std::println("[ImportanceMap] shaders/ImportanceMap.hlsl 컴파일 실패");

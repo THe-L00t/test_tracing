@@ -1,8 +1,6 @@
 #include "ImportanceVisualizePass.h"
+#include "ShaderCompile.h"
 #include <print>
-#include <dxcapi.h>
-
-#pragma comment(lib, "dxcompiler.lib")
 
 struct VisCB
 {
@@ -12,28 +10,7 @@ struct VisCB
     float    renderH;
     float    _pad[60];
 };
-static_assert(sizeof(VisCB) == 256, "VisCB 256B");
-
-static ComPtr<IDxcBlob> CompileCS(const wchar_t* path, const wchar_t* entry)
-{
-    ComPtr<IDxcUtils> utils; ComPtr<IDxcCompiler3> compiler;
-    ThrowIfFailed(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)));
-    ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler)));
-    ComPtr<IDxcIncludeHandler> inc; utils->CreateDefaultIncludeHandler(&inc);
-    ComPtr<IDxcBlobEncoding> src;
-    ThrowIfFailed(utils->LoadFile(path, nullptr, &src));
-    DxcBuffer buf{ src->GetBufferPointer(), src->GetBufferSize(), DXC_CP_ACP };
-    LPCWSTR args[] = { L"-E", entry, L"-T", L"cs_6_0", L"-Zi", L"-Qembed_debug" };
-    ComPtr<IDxcResult> res;
-    ThrowIfFailed(compiler->Compile(&buf, args, _countof(args), inc.Get(), IID_PPV_ARGS(&res)));
-    ComPtr<IDxcBlobUtf8> errs; res->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errs), nullptr);
-    if (errs && errs->GetStringLength())
-        std::println("[ImportanceVis] {}", (const char*)errs->GetBufferPointer());
-    HRESULT st; res->GetStatus(&st);
-    if (FAILED(st)) return nullptr;
-    ComPtr<IDxcBlob> blob; res->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&blob), nullptr);
-    return blob;
-}
+static_assert(sizeof(VisCB) == 256, "VisCB must be 256-byte aligned");
 
 bool ImportanceVisualizePass::Init(ID3D12Device* device,
                                     uint32_t displayW, uint32_t displayH,
@@ -106,7 +83,7 @@ bool ImportanceVisualizePass::Init(ID3D12Device* device,
 
     // PSO
     {
-        auto blob = CompileCS(L"shaders/ImportanceVisualize.hlsl", L"main");
+        auto blob = CompileComputeCS(L"shaders/ImportanceVisualize.hlsl");
         if (!blob) { std::println("[ImportanceVis] 셰이더 컴파일 실패"); return false; }
         D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
         pd.pRootSignature = m_rootSig.Get();

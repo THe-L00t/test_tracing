@@ -126,6 +126,7 @@
     <ClInclude Include="src\NRDDenoiser.h" />
     <ClInclude Include="src\ImportanceMapPass.h" />
     <ClInclude Include="src\ImportanceVisualizePass.h" />
+    <ClInclude Include="src\ShaderCompile.h" />
   </ItemGroup>
 
   <ItemGroup>

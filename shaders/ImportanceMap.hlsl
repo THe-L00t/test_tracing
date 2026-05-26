@@ -98,14 +98,15 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float Dz  = Sobel3x3((int2)px, g_depth);          // depth gradient (외부 모서리)
     float Dn  = NormalEdgeMax3x3((int2)px, g_normals); // normal discontinuity (내부 모서리)
 
-    // 정규화
-    //   En: log-luminance 차이 0..~3 → 0.3x
+    // === Phase 1 임시 스케일 — Phase 2 에서 percentile_99 정규화로 전체 교체 예정 ===
+    //   E:  log-luminance 차이, 0..~3 → 0.3x
     //   Dz: NDC depth 차이 → 50x (외부 모서리에서만 큰 값)
-    //   Dn: 1 - cos(angle) 이미 [0, 1] 범위 → scale 불필요, 곱하기 1
-    //   geometry D = max(Dz_norm, Dn) — 둘 중 큰 신호 사용 (외부 OR 내부 모서리 검출)
-    float En     = saturate(E * 0.3f);
-    float Dz_n   = saturate(Dz * 50.0f);
-    float D      = max(Dz_n, Dn);
+    //   Dn: 1 - cos(angle), 이미 [0, 1] 범위라 scale 불필요
+    //   geometry D = max(Dz_n, Dn) — 외부(Dz) OR 내부(Dn) 모서리 중 큰 신호
+    float En   = saturate(E  * 0.3f);
+    float Dz_n = saturate(Dz * 50.0f);
+    float D    = max(Dz_n, Dn);
+    // ==============================================================================
 
     float I = g_weightE * En + g_weightD * D;
     g_importance[px] = saturate(I);
