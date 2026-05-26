@@ -7,6 +7,7 @@
 #include "RenderTarget.h"
 #include "Denoiser.h"
 #include "DLSSIntegration.h"
+#include "NRDDenoiser.h"
 #include <chrono>
 
 class App
@@ -75,6 +76,7 @@ private:
 
     // DLSS
     DLSSIntegration m_dlss;
+    NRDDenoiser     m_nrdDenoiser;
 
     // 이전 프레임 카메라 (모션벡터 계산용, UpdateSceneCB 끝에 갱신)
     float m_prevCamPos[3]     = {};

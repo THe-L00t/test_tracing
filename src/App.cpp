@@ -314,6 +314,17 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
     {
         m_dlssEnabled = true;
         std::println("[App] DLSS 기본 활성화 — U 키로 토글");
+
+        // NRD 디노이저 초기화 (DLSS 렌더 해상도 기준)
+        //   파이프라인: PT(1spp lobe-separated) → NRDDenoiser → Composite → DLSS-RR
+        if (m_nrdDenoiser.Init(m_core.Device(), m_dlss.RenderWidth(), m_dlss.RenderHeight()))
+        {
+            std::println("[App] NRD 디노이저 활성화");
+        }
+        else
+        {
+            std::println("[App] NRD 디노이저 초기화 실패 — DLSS-RR 만 사용");
+        }
     }
     else
     {
@@ -331,6 +342,7 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
 void App::Shutdown()
 {
     m_core.FlushGPU();
+    m_nrdDenoiser.Shutdown();
     m_dlss.Shutdown(m_core.Device());
     m_denoiser.Shutdown();
     m_core.Shutdown();
