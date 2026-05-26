@@ -960,6 +960,18 @@ void App::OnKeyDown(uint32_t key)
             std::println("[App] Importance Map 미초기화 (DLSS off?)");
         }
     }
+    else if (key == VK_F2)
+    {
+        // 메트릭 단독 시각화 cycling: All → E → D → S → M → All
+        int next = (m_importanceMap.MetricFilter() + 1) % 5;
+        m_importanceMap.SetMetricFilter(next);
+        const char* name = (next == 0) ? "All (weighted sum)"
+                         : (next == 1) ? "E only (luminance edge)"
+                         : (next == 2) ? "D only (depth+normal edge)"
+                         : (next == 3) ? "S only (specular attention)"
+                         :               "M only (relative motion)";
+        std::println("[App] Importance metric filter → {}", name);
+    }
     else if (key == 'U')
     {
         if (m_dlss.IsAvailable())

@@ -36,7 +36,7 @@ struct ImportanceCB
     float    weightS;
     float    weightM;
     float    weightV;
-    float    pad;
+    int32_t  metricFilter;  // 0=All, 1=E only, 2=D only, 3=S only, 4=M only
     float    fill[56];
 };
 static_assert(sizeof(ImportanceCB) == 256, "ImportanceCB 256B");
@@ -360,6 +360,7 @@ void ImportanceMapPass::Apply(ID3D12GraphicsCommandList* cmdList,
     cbI.width   = m_width; cbI.height = m_height;
     cbI.weightE = m_weightE; cbI.weightD = m_weightD;
     cbI.weightS = m_weightS; cbI.weightM = m_weightM; cbI.weightV = m_weightV;
+    cbI.metricFilter = m_metricFilter;
     std::memcpy(m_cbImportanceMapped, &cbI, sizeof(ImportanceCB));
 
     // ── 2. 매 frame 변하는 SRV (slot 0..4) 채우기 ─────────────────

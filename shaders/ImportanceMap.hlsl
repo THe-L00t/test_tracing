@@ -35,7 +35,7 @@ cbuffer ImportanceCB : register(b0)
     float g_weightS;   // 0.20
     float g_weightM;   // 0.15
     float g_weightV;   // semantic multiplier (V항 stub 이라 효과 없음)
-    float _pad0;
+    int   g_metricFilter; // 디버그: 0=All, 1=E only, 2=D only, 3=S only, 4=M only
 };
 
 float LumLog(float3 c)
@@ -141,10 +141,16 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float M_hat = saturate(M / (pct.z + eps));
 
     // ── 3. 가중치 합 + V 멀티플라이어 ────────────────────────────
-    float I       = g_weightE * E_hat
-                  + g_weightD * D_hat
-                  + g_weightS * S_hat
-                  + g_weightM * M_hat;
+    //   디버그 metricFilter: 0=All, 1=E only, 2=D only, 3=S only, 4=M only
+    float I;
+    if      (g_metricFilter == 1) I = E_hat;
+    else if (g_metricFilter == 2) I = D_hat;
+    else if (g_metricFilter == 3) I = S_hat;
+    else if (g_metricFilter == 4) I = M_hat;
+    else                          I = g_weightE * E_hat
+                                    + g_weightD * D_hat
+                                    + g_weightS * S_hat
+                                    + g_weightM * M_hat;
     float I_final = I * (1.0f + g_weightV * V);
 
     g_importance[px] = saturate(I_final);

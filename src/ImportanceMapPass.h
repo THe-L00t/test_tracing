@@ -83,4 +83,11 @@ private:
     float m_weightS = 0.20f;
     float m_weightM = 0.15f;
     float m_weightV = 1.00f;  // multiplier scale (V 가 0 이면 무효)
+
+public:
+    // 디버그 — 0=All, 1=E only, 2=D only, 3=S only, 4=M only
+    void SetMetricFilter(int mode) { m_metricFilter = mode; }
+    int  MetricFilter() const noexcept { return m_metricFilter; }
+private:
+    int m_metricFilter = 0;
 };
