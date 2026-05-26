@@ -345,6 +345,31 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
     // DLSS 피처 생성 커맨드를 GPU에 제출
     m_core.SubmitAndFlush();
 
+    // ── Phase 5 — Dynamic Frame Time Compensation 인프라 ──────────
+    //   GPU TIMESTAMP query heap + readback ring (TIMESTAMP_FRAMES = 3 frame lag)
+    {
+        D3D12_QUERY_HEAP_DESC qhd{};
+        qhd.Type  = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+        qhd.Count = 2u * TIMESTAMP_FRAMES;  // begin/end × N
+        ThrowIfFailed(m_core.Device()->CreateQueryHeap(&qhd, IID_PPV_ARGS(&m_timestampHeap)));
+        m_timestampHeap->SetName(L"HPAR_TimestampHeap");
+
+        const UINT64 rbSize = sizeof(uint64_t) * 2u * TIMESTAMP_FRAMES;
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width            = rbSize;
+        rd.Height           = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format           = DXGI_FORMAT_UNKNOWN; rd.SampleDesc = {1, 0};
+        rd.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ThrowIfFailed(m_core.Device()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_timestampReadback)));
+        m_timestampReadback->SetName(L"HPAR_TimestampReadback");
+
+        ThrowIfFailed(m_core.CmdQueue()->GetTimestampFrequency(&m_timestampFreq));
+        std::println("[App] HPAR-PT Phase 5 DFTC: timestamp freq = {} ticks/sec", m_timestampFreq);
+    }
+
     m_sceneBuilt = true;
     std::println("[App] 초기화 완료 - 씬 0 (야외)");
     std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3 씬 전환, R 디노이저, U DLSS, ESC 종료");
@@ -927,14 +952,13 @@ void App::UpdateSceneCB()
     cb.prevAspectRatio  = m_prevAspectRatio;
     std::memcpy(cb.prevCamForward, m_prevCamForward, sizeof(float) * 3);
 
-    // Phase 4 — Adaptive Ray Allocation
+    // Phase 4 — Adaptive Ray Allocation + Phase 5 — Dynamic Frame Time Compensation
     //   importance smooth 가 DLSS 모드에서만 매 frame 계산되므로 DLSS 활성 시에만 on
     //   R_min = 4 (safe baseline) — Phase 7 reservoir reuse 추가 후 1까지 낮춤 가능.
-    //   현재 R_min=1 로 두면 유리/반투명 픽셀이 refracted ray 부족으로 검정,
-    //   flat 벽은 GI 한 번뿐이라 firefly noise.
+    //   R_max 는 Phase 5 DFTC 가 매 frame GPU 시간 측정 후 동적 조절 (2~8).
     cb.adaptiveRayEnabled = (m_dlssEnabled && m_dlss.IsAvailable() && m_importanceMap.Resource()) ? 1u : 0u;
     cb.rMin  = 4u;
-    cb.rMax  = 8u;
+    cb.rMax  = m_currentRMax;  // Phase 5 DFTC 동적 값
     cb.gamma = 1.0f;
     cb._pad2 = 0.0f;
 
@@ -1060,6 +1084,11 @@ void App::OnRender()
     m_core.BeginFrame();
 
     auto* cmd = m_core.CmdList();
+
+    // Phase 5 — Dynamic Frame Time Compensation: 현 frame timestamp 시작
+    const uint32_t tsBegin = 2u * m_timestampRingIdx;
+    const uint32_t tsEnd   = 2u * m_timestampRingIdx + 1u;
+    cmd->EndQuery(m_timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, tsBegin);
 
     // 디스크립터 힙 바인딩
     ID3D12DescriptorHeap* heaps[] = { m_core.CbvSrvUavHeap().Get() };
@@ -1203,6 +1232,55 @@ void App::OnRender()
         }
 
         m_renderTarget.CopyToBackBuffer(cmd, m_core.BackBuffer());
+    }
+
+    // ── Phase 5 — Dynamic Frame Time Compensation: timestamp 종료 + readback ──
+    cmd->EndQuery(m_timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, tsEnd);
+    cmd->ResolveQueryData(m_timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                          tsBegin, 2u, m_timestampReadback.Get(),
+                          (UINT64)tsBegin * sizeof(uint64_t));
+
+    // 이전 frame (TIMESTAMP_FRAMES-1 ago) 의 GPU 시간 읽기 — 그 slot 은 GPU 가 완료 보장
+    const uint32_t readRing = (m_timestampRingIdx + 1u) % TIMESTAMP_FRAMES;
+    if (m_timestampValidMask & (1u << readRing))
+    {
+        const UINT64 readOffset = (UINT64)(2u * readRing) * sizeof(uint64_t);
+        D3D12_RANGE rr{ (SIZE_T)readOffset, (SIZE_T)(readOffset + 2u * sizeof(uint64_t)) };
+        void* mapped = nullptr;
+        if (SUCCEEDED(m_timestampReadback->Map(0, &rr, &mapped)) && mapped)
+        {
+            const uint64_t* ts = reinterpret_cast<const uint64_t*>(
+                reinterpret_cast<const uint8_t*>(mapped) + readOffset);
+            const uint64_t begin = ts[0];
+            const uint64_t end   = ts[1];
+            if (end > begin && m_timestampFreq > 0)
+            {
+                const float gpuMs = (float)(end - begin) * 1000.0f / (float)m_timestampFreq;
+                // EMA 안정화 (한 frame spike 무시)
+                m_gpuMsEMA = m_gpuMsEMA * 0.9f + gpuMs * 0.1f;
+
+                // R_max 동적 조절: 16ms 대비 비율로 baseRMax(8) 스케일
+                const float compensation = 16.0f / (m_gpuMsEMA > 1.0f ? m_gpuMsEMA : 1.0f);
+                const float adjusted     = 8.0f * compensation;
+                uint32_t r = (uint32_t)(adjusted + 0.5f);
+                if (r < 2u) r = 2u;
+                if (r > 8u) r = 8u;
+                m_currentRMax = r;
+            }
+            D3D12_RANGE noWrite{0, 0};
+            m_timestampReadback->Unmap(0, &noWrite);
+        }
+    }
+    m_timestampValidMask |= (1u << m_timestampRingIdx);
+    m_timestampRingIdx = (m_timestampRingIdx + 1u) % TIMESTAMP_FRAMES;
+
+    // 60 frame 마다 GPU ms / R_max 콘솔 출력
+    //   m_frameCount 는 카메라 이동 시 0 으로 reset 되므로 별도 counter 사용
+    if (++m_lastTimingLog >= 60u)
+    {
+        std::println("[Phase 5 DFTC] GPU avg: {:.2f}ms, dynamic R_max = {}",
+                     m_gpuMsEMA, m_currentRMax);
+        m_lastTimingLog = 0;
     }
 
     m_core.EndFrame(m_smoothFps, m_denoiseEnabled);

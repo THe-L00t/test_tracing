@@ -62,6 +62,18 @@ private:
     DescriptorHandle m_importanceSrvNonDLSS;  // Phase 4: slot 15, smooth importance → 매 frame 갱신
     DescriptorHandle m_importanceSrvDLSS;     // Phase 4: DLSS heap slot, smooth importance → 매 frame 갱신
 
+    // Phase 5 — Dynamic Frame Time Compensation
+    //   GPU timestamp ring (2 query slots × N frames), readback 로 N frame lag 후 CPU 가 읽음
+    static constexpr uint32_t TIMESTAMP_FRAMES = 3;
+    ComPtr<ID3D12QueryHeap>  m_timestampHeap;        // TIMESTAMP query heap, 2 × N 슬롯
+    ComPtr<ID3D12Resource>   m_timestampReadback;    // readback buffer, 같은 크기
+    uint64_t                 m_timestampFreq = 0;    // CmdQueue frequency (ticks/sec)
+    uint32_t                 m_timestampRingIdx = 0; // 현재 frame 의 ring 슬롯
+    uint32_t                 m_timestampValidMask = 0; // bit i set: ring i 에 유효 데이터
+    float                    m_gpuMsEMA       = 16.0f;  // EMA 평균 GPU ms (초기 16ms = 60fps 가정)
+    uint32_t                 m_currentRMax    = 8u;     // DFTC 가 매 frame 조정
+    uint32_t                 m_lastTimingLog  = 0;      // 60 frame 마다 콘솔 출력용
+
     // 씬 상수 버퍼 (업로드 힙, 256바이트, 매 프레임 기록)
     ComPtr<ID3D12Resource> m_sceneCB;
 
