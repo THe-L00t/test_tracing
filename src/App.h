@@ -73,6 +73,7 @@ private:
     float                    m_gpuMsEMA       = 16.0f;  // EMA 평균 GPU ms (초기 16ms = 60fps 가정)
     uint32_t                 m_currentRMax    = 8u;     // DFTC 가 매 frame 조정
     uint32_t                 m_lastTimingLog  = 0;      // 60 frame 마다 콘솔 출력용
+    float                    m_dftcTargetMs   = 16.0f;  // DFTC 목표 ms (F3 으로 1.0 ↔ 16.0 토글 — 검증용)
 
     // 씬 상수 버퍼 (업로드 힙, 256바이트, 매 프레임 기록)
     ComPtr<ID3D12Resource> m_sceneCB;

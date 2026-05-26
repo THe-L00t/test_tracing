@@ -1024,6 +1024,14 @@ void App::OnKeyDown(uint32_t key)
                          :               "M only (relative motion)";
         std::println("[App] Importance metric filter → {}", name);
     }
+    else if (key == VK_F3)
+    {
+        // Phase 5 DFTC 검증용 — target ms 1.0 ↔ 16.0 토글
+        //   1.0 = 강제 R_max 감소 (현재 ~2.5ms GPU 시간 > 1.0 → trigger)
+        m_dftcTargetMs = (m_dftcTargetMs > 8.0f) ? 1.0f : 16.0f;
+        std::println("[App] Phase 5 DFTC target → {:.1f}ms (R_max 즉시 적응 시작)",
+                     m_dftcTargetMs);
+    }
     else if (key == 'U')
     {
         if (m_dlss.IsAvailable())
@@ -1259,8 +1267,9 @@ void App::OnRender()
                 // EMA 안정화 (한 frame spike 무시)
                 m_gpuMsEMA = m_gpuMsEMA * 0.9f + gpuMs * 0.1f;
 
-                // R_max 동적 조절: 16ms 대비 비율로 baseRMax(8) 스케일
-                const float compensation = 16.0f / (m_gpuMsEMA > 1.0f ? m_gpuMsEMA : 1.0f);
+                // R_max 동적 조절: target_ms 대비 비율로 baseRMax(8) 스케일
+                //   기본 target = 16ms (60fps). F3 으로 1ms 토글 시 강제 R_max 감소 (검증용).
+                const float compensation = m_dftcTargetMs / (m_gpuMsEMA > 1.0f ? m_gpuMsEMA : 1.0f);
                 const float adjusted     = 8.0f * compensation;
                 uint32_t r = (uint32_t)(adjusted + 0.5f);
                 if (r < 2u) r = 2u;
@@ -1278,8 +1287,8 @@ void App::OnRender()
     //   m_frameCount 는 카메라 이동 시 0 으로 reset 되므로 별도 counter 사용
     if (++m_lastTimingLog >= 60u)
     {
-        std::println("[Phase 5 DFTC] GPU avg: {:.2f}ms, dynamic R_max = {}",
-                     m_gpuMsEMA, m_currentRMax);
+        std::println("[Phase 5 DFTC] GPU avg: {:.2f}ms (target {:.1f}ms), dynamic R_max = {}",
+                     m_gpuMsEMA, m_dftcTargetMs, m_currentRMax);
         m_lastTimingLog = 0;
     }
 
