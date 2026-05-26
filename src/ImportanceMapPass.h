@@ -18,13 +18,15 @@ public:
     bool Init(ID3D12Device* device, uint32_t width, uint32_t height);
     void Shutdown();
 
-    // 매 프레임 호출: g_depth + g_accumulation 을 읽어 m_importance 계산
+    // 매 프레임 호출: depth + accum + normals 를 읽어 m_importance 계산
     //   cmdList: 열린 상태 (graphics 또는 compute)
-    //   depthRes: linear viewZ 또는 NDC depth (R16F/R32F/R32F any)
-    //   accumRes: HDR radiance (RGBA32F)
+    //   depthRes:   linear viewZ 또는 NDC depth (R32F)
+    //   accumRes:   HDR radiance (RGBA32F)
+    //   normalsRes: world normal(xyz) + roughness(w) RGBA16F — 안쪽 모서리 검출용
     void Apply(ID3D12GraphicsCommandList* cmdList,
                ID3D12Resource* depthRes,
-               ID3D12Resource* accumRes);
+               ID3D12Resource* accumRes,
+               ID3D12Resource* normalsRes);
 
     ID3D12Resource* Resource() const noexcept { return m_importance.Get(); }
 

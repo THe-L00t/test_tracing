@@ -86,12 +86,12 @@ bool ImportanceMapPass::Init(ID3D12Device* device, uint32_t width, uint32_t heig
     }
 
     // ── 2. Root Signature ─────────────────────────────────────────
-    //   param 0: descriptor table — SRV×2 (depth, accum) + UAV×1 (importance)
+    //   param 0: descriptor table — SRV×3 (depth, accum, normals) + UAV×1 (importance)
     //   param 1: root CBV b0
     {
         D3D12_DESCRIPTOR_RANGE ranges[2]{};
         ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        ranges[0].NumDescriptors                    = 2;       // t0, t1
+        ranges[0].NumDescriptors                    = 3;       // t0, t1, t2
         ranges[0].BaseShaderRegister                = 0;
         ranges[0].RegisterSpace                     = 0;
         ranges[0].OffsetInDescriptorsFromTableStart = 0;
@@ -99,7 +99,7 @@ bool ImportanceMapPass::Init(ID3D12Device* device, uint32_t width, uint32_t heig
         ranges[1].NumDescriptors                    = 1;       // u0
         ranges[1].BaseShaderRegister                = 0;
         ranges[1].RegisterSpace                     = 0;
-        ranges[1].OffsetInDescriptorsFromTableStart = 2;
+        ranges[1].OffsetInDescriptorsFromTableStart = 3;
 
         D3D12_ROOT_PARAMETER params[2]{};
         params[0].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -148,11 +148,11 @@ bool ImportanceMapPass::Init(ID3D12Device* device, uint32_t width, uint32_t heig
         m_pso->SetName(L"HPAR_ImportanceMap_PSO");
     }
 
-    // ── 4. 디스크립터 힙 (shader-visible, 3 슬롯) ──────────────────
+    // ── 4. 디스크립터 힙 (shader-visible, 4 슬롯: SRV×3 + UAV×1) ──
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        desc.NumDescriptors = 3;
+        desc.NumDescriptors = 4;
         desc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&m_descHeap)));
         m_descHeap->SetName(L"HPAR_ImportanceMap_DescHeap");
@@ -190,7 +190,8 @@ void ImportanceMapPass::Shutdown()
 
 void ImportanceMapPass::Apply(ID3D12GraphicsCommandList* cmdList,
                               ID3D12Resource* depthRes,
-                              ID3D12Resource* accumRes)
+                              ID3D12Resource* accumRes,
+                              ID3D12Resource* normalsRes)
 {
     // ── 1. CB 업데이트 ────────────────────────────────────────────
     ImportanceCB cb{};
@@ -204,11 +205,11 @@ void ImportanceMapPass::Apply(ID3D12GraphicsCommandList* cmdList,
     D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_descHeap->GetCPUDescriptorHandleForHeapStart();
     D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_descHeap->GetGPUDescriptorHandleForHeapStart();
 
-    // slot 0: SRV g_depth (depth 텍스처 — R32F 또는 R16F 둘 다 R_FLOAT 로 view)
+    // slot 0: SRV g_depth (R32F)
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.ViewDimension       = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srv.Format              = DXGI_FORMAT_R32_FLOAT;  // App.cpp 가 R32_FLOAT 로 m_gbufferDepth 생성
+        srv.Format              = DXGI_FORMAT_R32_FLOAT;
         srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv.Texture2D.MipLevels = 1;
         m_device->CreateShaderResourceView(depthRes, &srv, cpu);
@@ -224,19 +225,29 @@ void ImportanceMapPass::Apply(ID3D12GraphicsCommandList* cmdList,
         srv.Texture2D.MipLevels = 1;
         m_device->CreateShaderResourceView(accumRes, &srv, h);
     }
-    // slot 2: UAV g_importance
+    // slot 2: SRV g_normals (RGBA16F world normal + roughness)
     {
         D3D12_CPU_DESCRIPTOR_HANDLE h = cpu;
         h.ptr += m_descIncSize * 2;
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.ViewDimension       = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Format              = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels = 1;
+        m_device->CreateShaderResourceView(normalsRes, &srv, h);
+    }
+    // slot 3: UAV g_importance
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE h = cpu;
+        h.ptr += m_descIncSize * 3;
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
         uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         uav.Format        = DXGI_FORMAT_R16_FLOAT;
         m_device->CreateUnorderedAccessView(m_importance.Get(), nullptr, &uav, h);
     }
 
-    // ── 3. 입력 리소스 transition: UAV → SRV ──────────────────────
-    //   depthRes / accumRes 는 호출자가 UAV 상태로 두었음 (RT shader 가 마지막에 write)
-    D3D12_RESOURCE_BARRIER toSRV[2]{};
+    // ── 3. 입력 리소스 transition: UAV → SRV (3개) ────────────────
+    D3D12_RESOURCE_BARRIER toSRV[3]{};
     toSRV[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     toSRV[0].Transition.pResource   = depthRes;
     toSRV[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -244,7 +255,9 @@ void ImportanceMapPass::Apply(ID3D12GraphicsCommandList* cmdList,
     toSRV[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     toSRV[1] = toSRV[0];
     toSRV[1].Transition.pResource   = accumRes;
-    cmdList->ResourceBarrier(2, toSRV);
+    toSRV[2] = toSRV[0];
+    toSRV[2].Transition.pResource   = normalsRes;
+    cmdList->ResourceBarrier(3, toSRV);
 
     // ── 4. dispatch ──────────────────────────────────────────────
     cmdList->SetComputeRootSignature(m_rootSig.Get());
@@ -258,12 +271,14 @@ void ImportanceMapPass::Apply(ID3D12GraphicsCommandList* cmdList,
     const uint32_t gridY = (m_height + 7) / 8;
     cmdList->Dispatch(gridX, gridY, 1);
 
-    // ── 5. 복원: SRV → UAV ───────────────────────────────────────
-    D3D12_RESOURCE_BARRIER toUAV[2]{};
+    // ── 5. 복원: SRV → UAV (3개) ─────────────────────────────────
+    D3D12_RESOURCE_BARRIER toUAV[3]{};
     toUAV[0] = toSRV[0];
     toUAV[0].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     toUAV[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     toUAV[1] = toUAV[0];
     toUAV[1].Transition.pResource   = accumRes;
-    cmdList->ResourceBarrier(2, toUAV);
+    toUAV[2] = toUAV[0];
+    toUAV[2].Transition.pResource   = normalsRes;
+    cmdList->ResourceBarrier(3, toUAV);
 }

@@ -11,14 +11,15 @@
 
 Texture2D<float>   g_depth        : register(t0);  // linear viewZ (NRD 인코딩) OR NDC depth
 Texture2D<float4>  g_accumulation : register(t1);  // path tracer HDR output (RGBA32F)
+Texture2D<float4>  g_normals      : register(t2);  // world normal(xyz) + roughness(w)
 RWTexture2D<float> g_importance   : register(u0);  // 출력 (R16F)
 
 cbuffer ImportanceCB : register(b0)
 {
     uint  g_width;
     uint  g_height;
-    float g_weightE;   // 초기값 0.5 (Phase 2에서 0.40 가중치로 변경)
-    float g_weightD;   // 초기값 0.5 (Phase 2에서 0.25)
+    float g_weightE;   // luminance gradient 가중치
+    float g_weightD;   // geometry edge (depth + normal) 가중치
 };
 
 // HDR 휘도 — log 압축으로 1spp PT 의 firefly/노이즈 변동성 축소
@@ -50,6 +51,25 @@ float Sobel3x3(int2 center, Texture2D<float> tex)
     return sqrt(gx * gx + gy * gy);
 }
 
+// Normal discontinuity 3×3:
+//   안쪽 모서리(concave corner)는 depth 가 부드러워 |∇z| 가 0 이지만 normal 이 90° 꺾임.
+//   1 - dot(n_c, n_neighbor) 의 3×3 이웃 중 최대값 = "각도 가장 많이 꺾인 지점".
+//   flat = 0, 90° corner = 1.
+float NormalEdgeMax3x3(int2 center, Texture2D<float4> tex)
+{
+    float3 n_c = normalize(tex.Load(int3(center, 0)).xyz);
+    float  maxDiff = 0.0f;
+    [unroll] for (int dy = -1; dy <= 1; ++dy)
+    [unroll] for (int dx = -1; dx <= 1; ++dx)
+    {
+        if (dx == 0 && dy == 0) continue;
+        float3 n_s  = normalize(tex.Load(int3(center + int2(dx, dy), 0)).xyz);
+        float  diff = 1.0f - saturate(dot(n_c, n_s));
+        maxDiff = max(maxDiff, diff);
+    }
+    return maxDiff;
+}
+
 float Sobel3x3Luminance(int2 center, Texture2D<float4> tex)
 {
     float p00 = Luminance(tex.Load(int3(center + int2(-1, -1), 0)).rgb);
@@ -74,17 +94,19 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     // 경계 픽셀: Sobel 3×3 가 외부 access — clamp 로 처리됨 (HLSL Load 는 boundary clamp)
     // 더 안전하게 하려면 if(1 ≤ x < W-1 && ...) 조건 두지만 일단 단순화
-    float E = Sobel3x3Luminance(int2(px), g_accumulation);
-    float D = Sobel3x3((int2)px, g_depth);
+    float E   = Sobel3x3Luminance((int2)px, g_accumulation);
+    float Dz  = Sobel3x3((int2)px, g_depth);          // depth gradient (외부 모서리)
+    float Dn  = NormalEdgeMax3x3((int2)px, g_normals); // normal discontinuity (내부 모서리)
 
-    // Phase 1: 단순 합 + saturate (Phase 2 에서 percentile_99 정규화로 교체)
-    //   E 는 log-luminance 차이 → 0..~3 범위 → 0.3x 스케일 (이전 0.1 은 노이즈 너무 강조)
-    //   D 는 NDC depth 차이 → 50x (이전 100 은 작은 곡면도 saturate)
-    //   Phase 1 에서는 D 위주 (1spp noise 가 E 를 오염시켜 geometry edge 가 묻힘)
-    //   Phase 3 EMA 들어가면 E 가중치 복원
-    float En = saturate(E * 0.3f);
-    float Dn = saturate(D * 50.0f);
+    // 정규화
+    //   En: log-luminance 차이 0..~3 → 0.3x
+    //   Dz: NDC depth 차이 → 50x (외부 모서리에서만 큰 값)
+    //   Dn: 1 - cos(angle) 이미 [0, 1] 범위 → scale 불필요, 곱하기 1
+    //   geometry D = max(Dz_norm, Dn) — 둘 중 큰 신호 사용 (외부 OR 내부 모서리 검출)
+    float En     = saturate(E * 0.3f);
+    float Dz_n   = saturate(Dz * 50.0f);
+    float D      = max(Dz_n, Dn);
 
-    float I = g_weightE * En + g_weightD * Dn;
+    float I = g_weightE * En + g_weightD * D;
     g_importance[px] = saturate(I);
 }

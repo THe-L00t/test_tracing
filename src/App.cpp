@@ -1066,7 +1066,10 @@ void App::OnRender()
         //   현 프레임 PT 결과 사용 (다음 Phase 에서 prev-frame lag 또는 별도 입력으로 분리)
         if (m_importanceMap.Resource())
         {
-            m_importanceMap.Apply(cmd, m_dlss.DepthResource(), m_dlss.RenderAccumResource());
+            m_importanceMap.Apply(cmd,
+                                  m_dlss.DepthResource(),
+                                  m_dlss.RenderAccumResource(),
+                                  m_dlss.NormalResource());
         }
 
         if (m_importanceDebug)
