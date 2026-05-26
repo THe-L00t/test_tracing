@@ -77,6 +77,12 @@ cbuffer SceneConstants : register(b0)
     // Phase 4 — Adaptive Ray Allocation
     uint   rMin;           uint   rMax;
     float  gamma;          float  _pad2;
+
+    // Phase 6 — Tier 분류 (PHTR 통합)
+    //   tier = (Î > tierHigh) ? 1 : (Î > tierLow) ? 2 : 3
+    //   Tier 1: full PT (현 동작)  Tier 2: partial reuse  Tier 3: aggressive reuse
+    float  tierLow;        float  tierHigh;
+    float  _pad3a;         float  _pad3b;
 }
 
 // ── 상수 ────────────────────────────────────────────────────────

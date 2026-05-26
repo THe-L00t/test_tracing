@@ -1064,6 +1064,16 @@ void App::UpdateSceneCB()
     cb.gamma = 1.0f;
     cb._pad2 = 0.0f;
 
+    // Phase 6 — Tier 분류 (PHTR 통합).
+    //   Tier 1 (Î > tierHigh): full PT, reuse 금지 — 현재 동작 그대로
+    //   Tier 2 (tierLow < Î ≤ tierHigh): partial reuse — Phase 7 spatial reservoir
+    //   Tier 3 (Î ≤ tierLow): aggressive reuse — Phase 7 + Phase 8 temporal
+    //   Phase 6 자체는 RT 셰이더에서 마커만, 실제 reservoir 분기는 Phase 7 에서 활성.
+    cb.tierLow  = k_tierLow;
+    cb.tierHigh = k_tierHigh;
+    cb._pad3a   = 0.0f;
+    cb._pad3b   = 0.0f;
+
     // 현재 카메라를 다음 프레임의 "이전 카메라"로 저장
     std::memcpy(m_prevCamPos,     pos,     sizeof(float) * 3);
     std::memcpy(m_prevCamRight,   right,   sizeof(float) * 3);
@@ -1134,6 +1144,16 @@ void App::OnKeyDown(uint32_t key)
         m_dftcTargetMs = (m_dftcTargetMs > 8.0f) ? 1.0f : 16.0f;
         std::println("[App] Phase 5 DFTC target → {:.1f}ms (R_max 즉시 적응 시작)",
                      m_dftcTargetMs);
+    }
+    else if (key == VK_F4)
+    {
+        // Phase 6 — Tier 시각화 토글 (F1 importance 시각화의 색 모드).
+        //   F1 도 같이 켜져 있어야 화면에 보임 (heatmap 자리에서 색만 교체).
+        m_tierDebug = !m_tierDebug;
+        m_importanceVis.SetTierMode(m_tierDebug, k_tierLow, k_tierHigh);
+        std::println("[App] Phase 6 Tier 시각화 {} (Tier 1=빨강 Î>{:.2f}, 2=초록, 3=파랑 Î≤{:.2f}){}",
+                     m_tierDebug ? "ON" : "OFF", k_tierHigh, k_tierLow,
+                     m_tierDebug && !m_importanceDebug ? "  ※ F1 도 켜야 화면 표시" : "");
     }
     else if (key == 'U')
     {

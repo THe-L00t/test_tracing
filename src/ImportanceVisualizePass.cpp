@@ -8,7 +8,12 @@ struct VisCB
     uint32_t displayH;
     float    renderW;
     float    renderH;
-    float    _pad[60];
+    // Phase 6
+    uint32_t showTier;
+    float    tierLow;
+    float    tierHigh;
+    float    vis_pad0;
+    float    _pad[56];
 };
 static_assert(sizeof(VisCB) == 256, "VisCB must be 256-byte aligned");
 
@@ -139,6 +144,9 @@ void ImportanceVisualizePass::Apply(ID3D12GraphicsCommandList* cmdList,
     cb.displayH = m_displayH;
     cb.renderW  = m_renderW;
     cb.renderH  = m_renderH;
+    cb.showTier = m_showTier ? 1u : 0u;
+    cb.tierLow  = m_tierLow;
+    cb.tierHigh = m_tierHigh;
     std::memcpy(m_cbMapped, &cb, sizeof(VisCB));
 
     // Descriptor 채우기

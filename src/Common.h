@@ -118,6 +118,13 @@ struct alignas(16) SceneCB
     //   R_i = R_min + (R_max - R_min) · Î^γ
     uint32_t rMin;                uint32_t rMax;
     float    gamma;               float    _pad2;
+
+    // Phase 6 — Tier 분류 (PHTR 통합) (16)
+    //   tier = (Î > tierHigh) ? 1 : (Î > tierLow) ? 2 : 3
+    //   Tier 1: full PT (현재 동작 유지) / Tier 2: partial reuse / Tier 3: aggressive reuse
+    //   Phase 6 자체는 RT 셰이더에서 마커 계산만, 실제 reservoir reuse 는 Phase 7
+    float    tierLow;             float    tierHigh;
+    float    _pad3a;              float    _pad3b;
 };
-// 검증: 64+32+32+64+16+16+32+64+16 = 336
-static_assert(sizeof(SceneCB) == 336, "SceneCB must be 336 bytes");
+// 검증: 64+32+32+64+16+16+32+64+16+16 = 352
+static_assert(sizeof(SceneCB) == 352, "SceneCB must be 352 bytes");

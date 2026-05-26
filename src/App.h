@@ -98,6 +98,13 @@ private:
     ImportanceVisualizePass  m_importanceVis;
     bool                     m_importanceDebug = false;  // F1 키로 토글 — importance map 시각화
 
+    // Phase 6 — Tier 분류 (PHTR 통합)
+    //   F4 토글 → ImportanceVis 가 heatmap 대신 Tier 색 (1=빨강/2=초록/3=파랑)
+    //   tier 임계값은 RT 셰이더(Phase 7 reuse) 와 동기화: SceneCB.tierLow/High 채울 때 같은 상수 사용
+    static constexpr float   k_tierLow  = 0.30f;  // Î ≤ 0.30 → Tier 3
+    static constexpr float   k_tierHigh = 0.70f;  // Î >  0.70 → Tier 1
+    bool                     m_tierDebug = false;
+
     // 이전 프레임 카메라 (모션벡터 계산용, UpdateSceneCB 끝에 갱신)
     float m_prevCamPos[3]     = {};
     float m_prevCamRight[3]   = {1,0,0};

@@ -15,6 +15,10 @@ public:
     //   importance: 호출 시 UAV 상태여야 함 — 내부에서 UAV→SRV→UAV transition
     void Apply(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* importance);
 
+    // Phase 6 — Tier 시각화 모드 (F4 토글). false = Phase 1 heatmap.
+    void SetTierMode(bool on, float low, float high) noexcept
+    { m_showTier = on; m_tierLow = low; m_tierHigh = high; }
+
     // 출력 텍스처 — backbuffer 로 CopyResource 하는 데 사용
     ID3D12Resource* OutputResource() const noexcept { return m_output.Get(); }
 
@@ -32,4 +36,9 @@ private:
     uint32_t                     m_descIncSize = 0;
     ComPtr<ID3D12Resource>       m_constantBuffer;  // upload
     void*                        m_cbMapped = nullptr;
+
+    // Phase 6 — Tier 시각화 (F4 토글)
+    bool                         m_showTier = false;
+    float                        m_tierLow  = 0.3f;
+    float                        m_tierHigh = 0.7f;
 };
