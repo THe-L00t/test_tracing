@@ -1069,7 +1069,9 @@ void App::OnRender()
             m_importanceMap.Apply(cmd,
                                   m_dlss.DepthResource(),
                                   m_dlss.RenderAccumResource(),
-                                  m_dlss.NormalResource());
+                                  m_dlss.NormalResource(),
+                                  m_dlss.MotionVecResource(),
+                                  m_dlss.SpecAlbedoResource());
         }
 
         if (m_importanceDebug)

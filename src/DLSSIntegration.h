@@ -75,6 +75,8 @@ public:
     ID3D12Resource* DepthResource()       const noexcept { return m_depth.Get(); }
     ID3D12Resource* MotionVecResource()   const noexcept { return m_motionVec.Get(); }
     ID3D12Resource* NormalResource()      const noexcept { return m_renderNormal.Get(); }
+    ID3D12Resource* DiffAlbedoResource()  const noexcept { return m_diffuseAlbedo.Get(); }
+    ID3D12Resource* SpecAlbedoResource()  const noexcept { return m_specularAlbedo.Get(); }
     // NRD 입력 접근자 (NRDDenoiser 가 SetCommonSettings/Denoise 에 전달)
     ID3D12Resource* NrdDiffRadiance()     const noexcept { return m_nrdDiffRadiance.Get(); }
     ID3D12Resource* NrdSpecRadiance()     const noexcept { return m_nrdSpecRadiance.Get(); }

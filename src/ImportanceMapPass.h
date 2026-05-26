@@ -4,29 +4,29 @@
 
 // HPAR-PT Stage 2 (PASS 1) — Perceptual Importance Estimation
 //
-// Phase 1: E + D 만 (raw Sobel 합)
-// Phase 2: percentile_99 정규화 + S/M/V 항 (별도 클래스 또는 확장)
-// Phase 3: Temporal EMA smoothing
+// Phase 2: percentile_99 정규화 + S/M/V 항 + Daly 가중치
+// 3-Pass 컴퓨트 파이프라인:
+//   1. MetricHistogram — 픽셀별 E/S/M 메트릭 → 768-uint 히스토그램
+//   2. MetricReduce   — 히스토그램 prefix scan → percentile_99 (1×float4)
+//   3. ImportanceMap  — 정규화 + 가중치 합 + V 멀티플라이어 → Î(x,y)
 //
-// 입력: g_depth (linear viewZ 또는 NDC depth), g_accumulation (PT HDR 결과)
-// 출력: m_importance (R16F, render-res) — Î(x,y) ∈ [0, 1]
+// 입력 SRV (App 에서 전달):
+//   depth, accumulation, normals, motionVec, specAlbedo
 //
-// 자체 root signature + PSO + descriptor heap 사용 (App 공유 힙 미사용)
+// 출력: m_importance (R16F render-res)
 class ImportanceMapPass
 {
 public:
     bool Init(ID3D12Device* device, uint32_t width, uint32_t height);
     void Shutdown();
 
-    // 매 프레임 호출: depth + accum + normals 를 읽어 m_importance 계산
-    //   cmdList: 열린 상태 (graphics 또는 compute)
-    //   depthRes:   linear viewZ 또는 NDC depth (R32F)
-    //   accumRes:   HDR radiance (RGBA32F)
-    //   normalsRes: world normal(xyz) + roughness(w) RGBA16F — 안쪽 모서리 검출용
+    // 매 프레임 — 5개 GBuffer/PT 텍스처를 읽어 Î(x,y) 계산
     void Apply(ID3D12GraphicsCommandList* cmdList,
                ID3D12Resource* depthRes,
                ID3D12Resource* accumRes,
-               ID3D12Resource* normalsRes);
+               ID3D12Resource* normalsRes,
+               ID3D12Resource* motionVecRes,
+               ID3D12Resource* specAlbedoRes);
 
     ID3D12Resource* Resource() const noexcept { return m_importance.Get(); }
 
@@ -38,25 +38,49 @@ private:
     uint32_t      m_width  = 0;
     uint32_t      m_height = 0;
 
-    // 자원
-    ComPtr<ID3D12Resource> m_importance;  // R16F render-res, UAV
+    // 출력
+    ComPtr<ID3D12Resource> m_importance;       // R16F render-res
 
-    // 컴퓨트 파이프라인
-    ComPtr<ID3D12RootSignature> m_rootSig;
-    ComPtr<ID3D12PipelineState> m_pso;
+    // Phase 2 신규 — 히스토그램 + percentile
+    ComPtr<ID3D12Resource> m_histogram;        // RWByteAddressBuffer 768 uint
+    ComPtr<ID3D12Resource> m_percentile;       // StructuredBuffer<float4> 1 elem
+    DescriptorHandle       m_histogramUavCpuShaderInvisible;  // ClearUnorderedAccessViewUint 용 non-visible UAV
+    ComPtr<ID3D12DescriptorHeap> m_clearHeap;  // non-shader-visible 힙 (clear UAV 전용)
 
-    // 내부 디스크립터 힙 (SRV×2 + UAV×1 = 3 슬롯, non shader-visible)
-    //   매 dispatch 마다 shader-visible 힙(공유 힙) 의 슬롯에 복사하는 대신
-    //   자체 shader-visible 힙 보유로 단순화
+    // 3 root sig × 3 PSO
+    ComPtr<ID3D12RootSignature> m_rsHisto;
+    ComPtr<ID3D12RootSignature> m_rsReduce;
+    ComPtr<ID3D12RootSignature> m_rsImportance;
+    ComPtr<ID3D12PipelineState> m_psoHisto;
+    ComPtr<ID3D12PipelineState> m_psoReduce;
+    ComPtr<ID3D12PipelineState> m_psoImportance;
+
+    // 디스크립터 힙 (shader-visible, 3 패스 모두 공유)
+    //   slots 0..4 SRV (depth, accum, normals, motionVec, specAlbedo) — histo + importance 공통
+    //   slot  5  SRV percentile (importance 만 사용)
+    //   slot  6  UAV histogram   (histo + reduce)
+    //   slot  7  UAV percentile  (reduce 만)
+    //   slot  8  UAV importance  (importance 만)
     ComPtr<ID3D12DescriptorHeap> m_descHeap;
     uint32_t                     m_descIncSize = 0;
 
-    // 상수 버퍼 (upload heap)
-    ComPtr<ID3D12Resource> m_constantBuffer;
-    void*                  m_cbMapped = nullptr;
+    // 상수 버퍼들 (upload heap)
+    ComPtr<ID3D12Resource> m_cbHisto;
+    ComPtr<ID3D12Resource> m_cbReduce;
+    ComPtr<ID3D12Resource> m_cbImportance;
+    void* m_cbHistoMapped     = nullptr;
+    void* m_cbReduceMapped    = nullptr;
+    void* m_cbImportanceMapped = nullptr;
 
-    // 가중치 (Phase 1 임시값 — D 위주, 1spp 노이즈가 E 오염하므로)
-    //   Phase 3 EMA 들어가면 0.40 (E) / 0.25 (D) 로 복원 + S/M/V 추가
-    float m_weightE = 0.2f;
-    float m_weightD = 0.8f;
+    // 히스토그램 범위 (binning 상한)
+    float m_eMax = 5.0f;
+    float m_sMax = 5.0f;
+    float m_mMax = 10.0f;
+
+    // Daly 1993 HVS CSF 기반 가중치 + Phase 16 V 항
+    float m_weightE = 0.40f;
+    float m_weightD = 0.25f;
+    float m_weightS = 0.20f;
+    float m_weightM = 0.15f;
+    float m_weightV = 1.00f;  // multiplier scale (V 가 0 이면 무효)
 };
