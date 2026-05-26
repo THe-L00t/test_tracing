@@ -44,16 +44,25 @@ float LumLog(float3 c)
     return log(1.0f + max(L, 0.0f));
 }
 
+// HLSL Load 는 OOB 좌표에 대해 0 을 반환 (boundary clamp 가 아님 — 흔한 오해).
+// 따라서 row 0 / row H-1 / col 0 / col W-1 에서 Sobel 이 0 과 차이를 계산해
+// 가짜 edge 가 생기고, F1 시각화 시 display 경계에 가로/세로 선이 보임.
+// 모든 sample 좌표를 명시적으로 [0, W-1] × [0, H-1] 로 클램프한다.
+int2 ClampPx(int2 c)
+{
+    return clamp(c, int2(0, 0), int2((int)g_width - 1, (int)g_height - 1));
+}
+
 float Sobel3x3LumLog(int2 c, Texture2D<float4> tex)
 {
-    float p00 = LumLog(tex.Load(int3(c + int2(-1,-1),0)).rgb);
-    float p10 = LumLog(tex.Load(int3(c + int2( 0,-1),0)).rgb);
-    float p20 = LumLog(tex.Load(int3(c + int2( 1,-1),0)).rgb);
-    float p01 = LumLog(tex.Load(int3(c + int2(-1, 0),0)).rgb);
-    float p21 = LumLog(tex.Load(int3(c + int2( 1, 0),0)).rgb);
-    float p02 = LumLog(tex.Load(int3(c + int2(-1, 1),0)).rgb);
-    float p12 = LumLog(tex.Load(int3(c + int2( 0, 1),0)).rgb);
-    float p22 = LumLog(tex.Load(int3(c + int2( 1, 1),0)).rgb);
+    float p00 = LumLog(tex.Load(int3(ClampPx(c + int2(-1,-1)),0)).rgb);
+    float p10 = LumLog(tex.Load(int3(ClampPx(c + int2( 0,-1)),0)).rgb);
+    float p20 = LumLog(tex.Load(int3(ClampPx(c + int2( 1,-1)),0)).rgb);
+    float p01 = LumLog(tex.Load(int3(ClampPx(c + int2(-1, 0)),0)).rgb);
+    float p21 = LumLog(tex.Load(int3(ClampPx(c + int2( 1, 0)),0)).rgb);
+    float p02 = LumLog(tex.Load(int3(ClampPx(c + int2(-1, 1)),0)).rgb);
+    float p12 = LumLog(tex.Load(int3(ClampPx(c + int2( 0, 1)),0)).rgb);
+    float p22 = LumLog(tex.Load(int3(ClampPx(c + int2( 1, 1)),0)).rgb);
     float gx = (-p00 + p20) + 2.0f * (-p01 + p21) + (-p02 + p22);
     float gy = (-p00 - 2.0f * p10 - p20) + (p02 + 2.0f * p12 + p22);
     return sqrt(gx * gx + gy * gy);
@@ -61,14 +70,14 @@ float Sobel3x3LumLog(int2 c, Texture2D<float4> tex)
 
 float Sobel3x3Depth(int2 c, Texture2D<float> tex)
 {
-    float p00 = tex.Load(int3(c + int2(-1,-1),0));
-    float p10 = tex.Load(int3(c + int2( 0,-1),0));
-    float p20 = tex.Load(int3(c + int2( 1,-1),0));
-    float p01 = tex.Load(int3(c + int2(-1, 0),0));
-    float p21 = tex.Load(int3(c + int2( 1, 0),0));
-    float p02 = tex.Load(int3(c + int2(-1, 1),0));
-    float p12 = tex.Load(int3(c + int2( 0, 1),0));
-    float p22 = tex.Load(int3(c + int2( 1, 1),0));
+    float p00 = tex.Load(int3(ClampPx(c + int2(-1,-1)),0));
+    float p10 = tex.Load(int3(ClampPx(c + int2( 0,-1)),0));
+    float p20 = tex.Load(int3(ClampPx(c + int2( 1,-1)),0));
+    float p01 = tex.Load(int3(ClampPx(c + int2(-1, 0)),0));
+    float p21 = tex.Load(int3(ClampPx(c + int2( 1, 0)),0));
+    float p02 = tex.Load(int3(ClampPx(c + int2(-1, 1)),0));
+    float p12 = tex.Load(int3(ClampPx(c + int2( 0, 1)),0));
+    float p22 = tex.Load(int3(ClampPx(c + int2( 1, 1)),0));
     float gx = (-p00 + p20) + 2.0f * (-p01 + p21) + (-p02 + p22);
     float gy = (-p00 - 2.0f * p10 - p20) + (p02 + 2.0f * p12 + p22);
     return sqrt(gx * gx + gy * gy);
@@ -83,7 +92,7 @@ float NormalEdgeMax3x3(int2 c, Texture2D<float4> tex)
     [unroll] for (int dx = -1; dx <= 1; ++dx)
     {
         if (dx == 0 && dy == 0) continue;
-        float3 n_s = normalize(tex.Load(int3(c + int2(dx, dy), 0)).xyz);
+        float3 n_s = normalize(tex.Load(int3(ClampPx(c + int2(dx, dy)), 0)).xyz);
         maxDiff = max(maxDiff, 1.0f - saturate(dot(n_c, n_s)));
     }
     return maxDiff;
@@ -112,7 +121,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     [unroll] for (int dy = -1; dy <= 1; ++dy)
     [unroll] for (int dx = -1; dx <= 1; ++dx)
     {
-        mv_sum += g_motionVec.Load(int3(ip + int2(dx, dy), 0));
+        mv_sum += g_motionVec.Load(int3(ClampPx(ip + int2(dx, dy)), 0));
     }
     float M = length(mv_c - mv_sum / 9.0f);
 

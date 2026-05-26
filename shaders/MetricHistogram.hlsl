@@ -36,16 +36,23 @@ float LumLog(float3 c)
     return log(1.0f + max(L, 0.0f));
 }
 
+// HLSL Load 는 OOB 좌표에 대해 0 반환 → boundary 가짜 edge.
+// 모든 sample 좌표를 [0, W-1] × [0, H-1] 로 클램프.
+int2 ClampPx(int2 c)
+{
+    return clamp(c, int2(0, 0), int2((int)g_width - 1, (int)g_height - 1));
+}
+
 float Sobel3x3LumLog(int2 c, Texture2D<float4> tex)
 {
-    float p00 = LumLog(tex.Load(int3(c + int2(-1,-1),0)).rgb);
-    float p10 = LumLog(tex.Load(int3(c + int2( 0,-1),0)).rgb);
-    float p20 = LumLog(tex.Load(int3(c + int2( 1,-1),0)).rgb);
-    float p01 = LumLog(tex.Load(int3(c + int2(-1, 0),0)).rgb);
-    float p21 = LumLog(tex.Load(int3(c + int2( 1, 0),0)).rgb);
-    float p02 = LumLog(tex.Load(int3(c + int2(-1, 1),0)).rgb);
-    float p12 = LumLog(tex.Load(int3(c + int2( 0, 1),0)).rgb);
-    float p22 = LumLog(tex.Load(int3(c + int2( 1, 1),0)).rgb);
+    float p00 = LumLog(tex.Load(int3(ClampPx(c + int2(-1,-1)),0)).rgb);
+    float p10 = LumLog(tex.Load(int3(ClampPx(c + int2( 0,-1)),0)).rgb);
+    float p20 = LumLog(tex.Load(int3(ClampPx(c + int2( 1,-1)),0)).rgb);
+    float p01 = LumLog(tex.Load(int3(ClampPx(c + int2(-1, 0)),0)).rgb);
+    float p21 = LumLog(tex.Load(int3(ClampPx(c + int2( 1, 0)),0)).rgb);
+    float p02 = LumLog(tex.Load(int3(ClampPx(c + int2(-1, 1)),0)).rgb);
+    float p12 = LumLog(tex.Load(int3(ClampPx(c + int2( 0, 1)),0)).rgb);
+    float p22 = LumLog(tex.Load(int3(ClampPx(c + int2( 1, 1)),0)).rgb);
     float gx = (-p00 + p20) + 2.0f * (-p01 + p21) + (-p02 + p22);
     float gy = (-p00 - 2.0f * p10 - p20) + (p02 + 2.0f * p12 + p22);
     return sqrt(gx * gx + gy * gy);
@@ -79,7 +86,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     [unroll] for (int dy = -1; dy <= 1; ++dy)
     [unroll] for (int dx = -1; dx <= 1; ++dx)
     {
-        mv_sum += g_motionVec.Load(int3((int2)px + int2(dx, dy), 0));
+        mv_sum += g_motionVec.Load(int3(ClampPx((int2)px + int2(dx, dy)), 0));
     }
     float2 mv_mean = mv_sum / 9.0f;
     float  M = length(mv_c - mv_mean);
