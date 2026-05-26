@@ -53,7 +53,8 @@ private:
     ComPtr<ID3D12Resource> m_constantBuffer;
     void*                  m_cbMapped = nullptr;
 
-    // 가중치 (Phase 1 초기값, Phase 2 에서 0.40 / 0.25 로 교체)
-    float m_weightE = 0.5f;
-    float m_weightD = 0.5f;
+    // 가중치 (Phase 1 임시값 — D 위주, 1spp 노이즈가 E 오염하므로)
+    //   Phase 3 EMA 들어가면 0.40 (E) / 0.25 (D) 로 복원 + S/M/V 추가
+    float m_weightE = 0.2f;
+    float m_weightD = 0.8f;
 };

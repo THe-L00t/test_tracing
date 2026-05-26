@@ -21,10 +21,13 @@ cbuffer ImportanceCB : register(b0)
     float g_weightD;   // 초기값 0.5 (Phase 2에서 0.25)
 };
 
-// HDR 휘도
+// HDR 휘도 — log 압축으로 1spp PT 의 firefly/노이즈 변동성 축소
+//   raw L: 0..100+ (HDR), Sobel 시 노이즈가 곧 edge 로 오인됨
+//   log(1+L): 0..5 정도로 compress → Sobel 이 진짜 휘도 edge 만 검출
 float Luminance(float3 c)
 {
-    return dot(c, float3(0.2126f, 0.7152f, 0.0722f));
+    float L = dot(c, float3(0.2126f, 0.7152f, 0.0722f));
+    return log(1.0f + max(L, 0.0f));
 }
 
 // Sobel 3×3 X kernel: [[-1,0,1],[-2,0,2],[-1,0,1]]
@@ -75,11 +78,12 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float D = Sobel3x3((int2)px, g_depth);
 
     // Phase 1: 단순 합 + saturate (Phase 2 에서 percentile_99 정규화로 교체)
-    //   E 는 HDR 휘도 차이 → 값 범위 0~~100+ → 임시로 1/10 스케일
-    //   D 는 NDC depth 또는 viewZ 차이 → 일단 100x 증폭
-    //   Phase 2 에서 percentile_99 로 robust 정규화하면 이 스케일링 불필요
-    float En = saturate(E * 0.1f);
-    float Dn = saturate(D * 100.0f);
+    //   E 는 log-luminance 차이 → 0..~3 범위 → 0.3x 스케일 (이전 0.1 은 노이즈 너무 강조)
+    //   D 는 NDC depth 차이 → 50x (이전 100 은 작은 곡면도 saturate)
+    //   Phase 1 에서는 D 위주 (1spp noise 가 E 를 오염시켜 geometry edge 가 묻힘)
+    //   Phase 3 EMA 들어가면 E 가중치 복원
+    float En = saturate(E * 0.3f);
+    float Dn = saturate(D * 50.0f);
 
     float I = g_weightE * En + g_weightD * Dn;
     g_importance[px] = saturate(I);
