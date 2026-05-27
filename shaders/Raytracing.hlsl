@@ -169,13 +169,7 @@ float3 OctUnpack32(uint p)
     float2 q = float2(float(p & 0xFFFFu), float((p >> 16u) & 0xFFFFu));
     float2 e = q / 65535.0f * 2.0f - 1.0f;   // [-1, 1]
     float3 v = float3(e, 1.0f - abs(e.x) - abs(e.y));
-    if (v.z < 0.0f)
-    {
-        // HLSL 2021+: 벡터 비교의 ternary 금지 → 컴포넌트별 처리
-        float2 s = float2(v.x >= 0.0f ? 1.0f : -1.0f,
-                          v.y >= 0.0f ? 1.0f : -1.0f);
-        v.xy = (1.0f - abs(v.yx)) * s;
-    }
+    if (v.z < 0.0f) v.xy = (1.0f - abs(v.yx)) * (v.xy >= 0.0f ? 1.0f : -1.0f);
     return normalize(v);
 }
 
@@ -195,8 +189,7 @@ Reservoir EmptyReservoir()
 
 Reservoir LoadReservoir(uint2 px)
 {
-    // RWTexture2D<uint4> 는 Load(int3) 가 truncate 되므로 인덱서 사용.
-    uint4 v = g_reservoirIn[px];
+    uint4 v = g_reservoirIn.Load(int3((int2)px, 0));
     Reservoir r;
     r.dirOct = v.x;
     r.W      = asfloat(v.y);
