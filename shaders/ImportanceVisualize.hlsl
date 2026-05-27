@@ -16,10 +16,10 @@ cbuffer VisualizeCB : register(b0)
     uint  g_displayH;
     float g_renderW;
     float g_renderH;
-    uint  g_showTier;   // Phase 6: 0=heatmap, 1=tier 색
-    float g_tierLow;    // Phase 6: Î ≤ tierLow → Tier 3
-    float g_tierHigh;   // Phase 6: Î > tierHigh → Tier 1
-    float g_vis_pad0;
+    uint  g_showTier;       // Phase 6: 0=heatmap, 1=tier 색
+    float g_tierLow;        // Phase 6: Î ≤ tierLow → Tier 3
+    float g_tierHigh;       // Phase 6: Î > tierHigh → Tier 1
+    uint  g_binaryMask;     // Phase 7 F6: 1=binary (0.5 임계, valid=초록), 0=일반 heatmap
 };
 
 [numthreads(8, 8, 1)]
@@ -33,7 +33,14 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float I = g_importance.SampleLevel(s_linear, uv, 0);
 
     float3 color;
-    if (g_showTier != 0u)
+    if (g_binaryMask != 0u)
+    {
+        // Phase 7 F6 — valid mask binary 시각화 (0.5 임계로 hard-step)
+        //   bilinear sample blend 영역이 모호한 색으로 보이지 않도록 binary 처리.
+        //   valid (≥0.5) → 초록, invalid (<0.5) → 검정
+        color = (I >= 0.5f) ? float3(0.15f, 1.0f, 0.15f) : float3(0.0f, 0.0f, 0.0f);
+    }
+    else if (g_showTier != 0u)
     {
         // Phase 6 — Tier 분류 색 (PHTR 통합 마커)
         //   Tier 1 (Î > high)        : full PT, reuse 금지  → 빨강

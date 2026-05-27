@@ -83,7 +83,9 @@ private:
     bool  m_firstFrameFlag      = true;
     float m_tierLow             = 0.30f;
     float m_tierHigh            = 0.70f;
-    float m_depthThreshold      = 0.001f;
+    // depth: NDC 절대 차이. 0.001 은 sub-pixel jitter 만으로도 넘어 너무 엄격.
+    //   0.01 = 가까운 표면(v_z~1m)의 ~1cm 정도, 같은 surface point 라면 충분히 안전.
+    float m_depthThreshold      = 0.01f;
     float m_normalCosThreshold  = 0.906f;  // ~25°
     float m_motionLenMaxPx      = 256.0f;
 };

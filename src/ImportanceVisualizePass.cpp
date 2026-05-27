@@ -12,7 +12,7 @@ struct VisCB
     uint32_t showTier;
     float    tierLow;
     float    tierHigh;
-    float    vis_pad0;
+    uint32_t binaryMask;   // Phase 7 F6: 1=valid mask binary 시각화
     float    _pad[56];
 };
 static_assert(sizeof(VisCB) == 256, "VisCB must be 256-byte aligned");
@@ -145,9 +145,11 @@ void ImportanceVisualizePass::Apply(ID3D12GraphicsCommandList* cmdList,
     cb.displayH = m_displayH;
     cb.renderW  = m_renderW;
     cb.renderH  = m_renderH;
-    cb.showTier = m_showTier ? 1u : 0u;
-    cb.tierLow  = m_tierLow;
-    cb.tierHigh = m_tierHigh;
+    cb.showTier   = m_showTier ? 1u : 0u;
+    cb.tierLow    = m_tierLow;
+    cb.tierHigh   = m_tierHigh;
+    // Phase 7 F6: srvFormat 이 R8_UNORM 이면 valid mask 시각화로 간주 → binary 모드
+    cb.binaryMask = (srvFormat == DXGI_FORMAT_R8_UNORM) ? 1u : 0u;
     std::memcpy(m_cbMapped, &cb, sizeof(VisCB));
 
     // Descriptor 채우기

@@ -73,20 +73,24 @@ void main(uint3 DTid : SV_DispatchThreadID)
     if (prevPx.x < 0.0f || prevPx.y < 0.0f ||
         prevPx.x >= (float)g_width || prevPx.y >= (float)g_height) return;
 
-    // ── 3. Depth 유효성 ─────────────────────────────────────────
+    // ── 3. Depth/Normal 유효성 — point sample (nearest pixel) ───
+    //   depth/normal 을 bilinear 로 sample 하면 surface 경계에서 다른 표면이 blend 되어
+    //   비교가 부정확. nearest pixel 의 정확한 값으로 비교한다.
+    int2 prevPxI = (int2)(prevPx + 0.5f);
+    prevPxI = clamp(prevPxI, int2(0, 0), int2((int)g_width - 1, (int)g_height - 1));
+
     float depthCurr = g_currDepth.Load(int3((int2)px, 0));
-    // bilinear UV (텍스처 가운데 0.5 보정)
-    float2 uv = (prevPx + 0.5f) / float2((float)g_width, (float)g_height);
-    float depthPrev = g_prevDepth.SampleLevel(g_linearClamp, uv, 0);
+    float depthPrev = g_prevDepth.Load(int3(prevPxI, 0));
     if (abs(depthPrev - depthCurr) > g_depthThreshold) return;
 
-    // ── 4. Normal 유효성 ────────────────────────────────────────
     float3 nCurr = normalize(g_currNormal.Load(int3((int2)px, 0)).xyz);
-    float3 nPrev = normalize(g_prevNormal.SampleLevel(g_linearClamp, uv, 0).xyz);
+    float3 nPrev = normalize(g_prevNormal.Load(int3(prevPxI, 0)).xyz);
     if (dot(nCurr, nPrev) < g_normalCosThreshold) return;
 
-    // ── 5. Radiance 재투영 (bilinear) ───────────────────────────
+    // ── 4. Radiance 재투영 (bilinear) ───────────────────────────
     //   unbiased: prev frame PT 결과를 그대로 가져옴 — statistical resampling 없음
+    //   radiance 는 부드러운 신호이므로 bilinear OK (depth/normal 만 point sample)
+    float2 uv = (prevPx + 0.5f) / float2((float)g_width, (float)g_height);
     float4 prevRad = g_prevRadiance.SampleLevel(g_linearClamp, uv, 0);
 
     g_reusedRadiance[px] = float4(prevRad.rgb, 1.0f);
