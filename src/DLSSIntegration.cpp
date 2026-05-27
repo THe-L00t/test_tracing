@@ -169,9 +169,9 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
     // ── 4. 공유 힙에 UAV/SRV 등록 ───────────────────────────────
     // shader-visible 힙은 CPU read 불가 → CopyDescriptors 사용 불가
     // 리소스 포인터로 SRV를 직접 생성한다.
-    // 비DLSS 슬롯 0..17 (UAV 12 + SRV 6, Phase 7 reservoir 포함) 선점 후 → DLSS는 슬롯 18 부터 시작
+    // 비DLSS 슬롯 0..9 선점 후 → DLSS는 슬롯 10부터 시작
 
-    // 슬롯 18 (DLSS heap base): UAV m_renderColor (u0)
+    // 슬롯 16: UAV m_renderColor (u0)
     {
         DescriptorHandle h = sharedHeap.Allocate();
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -251,25 +251,7 @@ bool DLSSIntegration::Init(ID3D12Device*               device,
         uav.Format        = DXGI_FORMAT_R16_FLOAT;
         device->CreateUnorderedAccessView(m_nrdViewZ.Get(), nullptr, &uav, h.cpu);
     }
-    // 슬롯 26: UAV reservoirIn (u10, Phase 7 prev frame). 매 frame App 이 ping-pong 갱신.
-    {
-        DescriptorHandle h = sharedHeap.Allocate();
-        m_reservoirInMirrorCPU = h.cpu;
-        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
-        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        uav.Format        = DXGI_FORMAT_R32G32B32A32_UINT;
-        device->CreateUnorderedAccessView(nullptr, nullptr, &uav, h.cpu);
-    }
-    // 슬롯 27: UAV reservoirOut (u11, Phase 7 curr frame). 매 frame App 이 ping-pong 갱신.
-    {
-        DescriptorHandle h = sharedHeap.Allocate();
-        m_reservoirOutMirrorCPU = h.cpu;
-        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
-        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        uav.Format        = DXGI_FORMAT_R32G32B32A32_UINT;
-        device->CreateUnorderedAccessView(nullptr, nullptr, &uav, h.cpu);
-    }
-    // 슬롯 28: SRV TLAS 미러
+    // 슬롯 26: SRV TLAS 미러
     {
         DescriptorHandle h = sharedHeap.Allocate();
         m_tlasMirrorCPU = h.cpu;

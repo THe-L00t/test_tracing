@@ -9,29 +9,27 @@ struct NVSDK_NGX_Parameter;
 // ---------------------------------------------------------------
 // DLSS Super Resolution 통합 클래스
 //
-// 힙 슬롯 배치 (BuildDescriptors 완료 후 Init 호출 기준, 슬롯 0..17 선점 후):
-//   비DLSS 가 18 슬롯 사용 (UAV 12 + SRV 6, Phase 7 reservoir 포함) → DLSS 진입은 18 부터.
-//  [18]  UAV m_renderColor    (RGBA8,         render res) ← RT shader u0
-//  [19]  UAV m_renderAccum    (RGBA32F,        render res) ← RT shader u1
-//  [20]  UAV m_depth          (R32_FLOAT,      render res) ← RT shader u2
-//  [21]  UAV m_motionVec      (R16G16_FLOAT,   render res) ← RT shader u3
-//  [22]  UAV m_renderNormal   (R16G16B16A16_F, render res) ← RT shader u4
-//  [23]  UAV m_diffuseAlbedo  (R16G16B16A16_F, render res) ← RT shader u5
-//  [24]  UAV m_specularAlbedo (R16G16B16A16_F, render res) ← RT shader u6
-//  [25]  UAV m_nrdDiffRadiance(R16G16B16A16_F, render res) ← RT shader u7
-//  [26]  UAV m_nrdSpecRadiance(R16G16B16A16_F, render res) ← RT shader u8
-//  [27]  UAV m_nrdViewZ       (R16_FLOAT,      render res) ← RT shader u9
-//  [28]  UAV reservoirIn      (RGBA32_UINT,    render res) ← RT shader u10 (Phase 7, ping-pong)
-//  [29]  UAV reservoirOut     (RGBA32_UINT,    render res) ← RT shader u11 (Phase 7, ping-pong)
-//  [30]  SRV TLAS 미러        ← t0
-//  [31]  SRV plane VB 미러    ← t1
-//  [32]  SRV cube VB 미러     ← t2
-//  [33]  SRV room VB 미러     ← t3
-//  [34]  SRV sphere VB 미러   ← t4
-//  [35]  SRV importance       ← t5 (Phase 4, 매 frame ping-pong 갱신)
+// 힙 슬롯 배치 (BuildDescriptors 완료 후 Init 호출 기준, 슬롯 0..15 선점 후):
+//   비DLSS 의 슬롯 15 (Phase 4 importance SRV) 가 추가되어 DLSS 진입은 16 부터.
+//  [16]  UAV m_renderColor    (RGBA8,         render res) ← RT shader u0
+//  [17]  UAV m_renderAccum    (RGBA32F,        render res) ← RT shader u1
+//  [18]  UAV m_depth          (R32_FLOAT,      render res) ← RT shader u2
+//  [19]  UAV m_motionVec      (R16G16_FLOAT,   render res) ← RT shader u3
+//  [20]  UAV m_renderNormal   (R16G16B16A16_F, render res) ← RT shader u4
+//  [21]  UAV m_diffuseAlbedo  (R16G16B16A16_F, render res) ← RT shader u5
+//  [22]  UAV m_specularAlbedo (R16G16B16A16_F, render res) ← RT shader u6
+//  [23]  UAV m_nrdDiffRadiance(R16G16B16A16_F, render res) ← RT shader u7
+//  [24]  UAV m_nrdSpecRadiance(R16G16B16A16_F, render res) ← RT shader u8
+//  [25]  UAV m_nrdViewZ       (R16_FLOAT,      render res) ← RT shader u9
+//  [26]  SRV TLAS 미러        ← t0
+//  [27]  SRV plane VB 미러    ← t1
+//  [28]  SRV cube VB 미러     ← t2
+//  [29]  SRV room VB 미러     ← t3
+//  [30]  SRV sphere VB 미러   ← t4
+//  [31]  SRV importance       ← t5 (Phase 4, 매 frame ping-pong 갱신)
 //
-// DLSS 모드 시 SetComputeRootDescriptorTable(0, heap[18]) 로
-// 기존 루트 시그니처를 그대로 재사용한다 (Phase 7 이전엔 16 이었음).
+// DLSS 모드 시 SetComputeRootDescriptorTable(0, heap[16]) 로
+// 기존 루트 시그니처를 그대로 재사용한다.
 // ---------------------------------------------------------------
 class DLSSIntegration
 {
@@ -84,9 +82,6 @@ public:
 
     // Phase 4 — DLSS heap 의 t5(importance) SRV CPU 핸들. App 이 매 frame 갱신.
     D3D12_CPU_DESCRIPTOR_HANDLE ImportanceMirrorCPU() const noexcept { return m_importanceMirrorCPU; }
-    // Phase 7 — DLSS heap 의 u10(reservoirIn) / u11(reservoirOut) UAV CPU 핸들. 매 frame ping-pong 갱신.
-    D3D12_CPU_DESCRIPTOR_HANDLE ReservoirInMirrorCPU()  const noexcept { return m_reservoirInMirrorCPU; }
-    D3D12_CPU_DESCRIPTOR_HANDLE ReservoirOutMirrorCPU() const noexcept { return m_reservoirOutMirrorCPU; }
     // NRD 입력 접근자 (NRDDenoiser 가 SetCommonSettings/Denoise 에 전달)
     ID3D12Resource* NrdDiffRadiance()     const noexcept { return m_nrdDiffRadiance.Get(); }
     ID3D12Resource* NrdSpecRadiance()     const noexcept { return m_nrdSpecRadiance.Get(); }
@@ -122,10 +117,6 @@ private:
 
     // Phase 4 — importance SRV (t5) CPU 핸들. App 이 매 frame 갱신.
     D3D12_CPU_DESCRIPTOR_HANDLE m_importanceMirrorCPU{};
-
-    // Phase 7 — reservoir UAV (u10/u11) CPU 핸들. App 이 매 frame ping-pong 으로 갱신.
-    D3D12_CPU_DESCRIPTOR_HANDLE m_reservoirInMirrorCPU{};
-    D3D12_CPU_DESCRIPTOR_HANDLE m_reservoirOutMirrorCPU{};
 
     uint32_t m_renderW  = 0, m_renderH  = 0;
     uint32_t m_displayW = 0, m_displayH = 0;

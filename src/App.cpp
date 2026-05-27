@@ -243,7 +243,7 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
 
         D3D12_RESOURCE_DESC cbDesc{};
         cbDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        cbDesc.Width            = 512;  // sizeof(SceneCB)=368 (Phase 7), D3D12 256바이트 정렬 → 512
+        cbDesc.Width            = 512;  // sizeof(SceneCB)=320, D3D12 256바이트 정렬 → 512
         cbDesc.Height           = 1;
         cbDesc.DepthOrArraySize = 1;
         cbDesc.MipLevels        = 1;
@@ -370,35 +370,10 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
         std::println("[App] HPAR-PT Phase 5 DFTC: timestamp freq = {} ticks/sec", m_timestampFreq);
     }
 
-    // ── Phase 7 — Spatial Reservoir Reuse 버퍼 (RGBA32_UINT render-res ping-pong) ──
-    //   render-res: DLSS 활성 시 m_dlss.Render*, 아니면 display res.
-    //   비DLSS 모드에서는 cb.reservoirEnabled=0 으로 셰이더가 접근 안 함 (slot 만 점유).
-    {
-        const uint32_t rW = (m_dlssEnabled && m_dlss.IsAvailable()) ? m_dlss.RenderWidth()  : m_width;
-        const uint32_t rH = (m_dlssEnabled && m_dlss.IsAvailable()) ? m_dlss.RenderHeight() : m_height;
-        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
-        D3D12_RESOURCE_DESC rd{};
-        rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        rd.Width  = rW; rd.Height = rH;
-        rd.DepthOrArraySize = 1; rd.MipLevels = 1;
-        rd.Format = DXGI_FORMAT_R32G32B32A32_UINT;
-        rd.SampleDesc = {1, 0};
-        rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        rd.Flags  = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        for (uint32_t k = 0; k < 2; ++k)
-        {
-            ThrowIfFailed(m_core.Device()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&m_reservoir[k])));
-        }
-        m_reservoir[0]->SetName(L"HPAR_Reservoir_A");
-        m_reservoir[1]->SetName(L"HPAR_Reservoir_B");
-        std::println("[App] HPAR-PT Phase 7 Reservoir: {}x{} R32G32B32A32_UINT × 2 (ping-pong)", rW, rH);
-    }
-
     m_sceneBuilt = true;
     std::println("[App] 초기화 완료 - 씬 0 (야외)");
     std::println("[App] 조작: WASD 이동, IJKL 시점, QE 상하, 1/2/3/4 씬 전환, R 디노이저, U DLSS, ESC 종료");
-    std::println("[App] 디버그: F1 importance heatmap, F2 metric cycle, F3 DFTC target 1ms, F4 Tier 색, F5 Reservoir reuse");
+    std::println("[App] 디버그: F1 importance heatmap, F2 metric cycle, F3 DFTC target 1ms 토글");
 }
 
 void App::Shutdown()
@@ -543,22 +518,7 @@ void App::BuildDescriptors()
         device->CreateUnorderedAccessView(m_nrdViewZ.Get(), nullptr, &uav, h.cpu);
     }
 
-    // 슬롯 10: u10 reservoirIn (Phase 7 prev frame). 매 frame ping-pong 으로 갱신.
-    m_reservoirInUAVNonDLSS = heap.Allocate();
-    {
-        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        uav.Format = DXGI_FORMAT_R32G32B32A32_UINT;
-        device->CreateUnorderedAccessView(nullptr, nullptr, &uav, m_reservoirInUAVNonDLSS.cpu);
-    }
-    // 슬롯 11: u11 reservoirOut (Phase 7 curr frame). 매 frame ping-pong 으로 갱신.
-    m_reservoirOutUAVNonDLSS = heap.Allocate();
-    {
-        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{}; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        uav.Format = DXGI_FORMAT_R32G32B32A32_UINT;
-        device->CreateUnorderedAccessView(nullptr, nullptr, &uav, m_reservoirOutUAVNonDLSS.cpu);
-    }
-
-    // 슬롯 12: SRV (TLAS)  ← 슬롯 0..11은 UAV
+    // 슬롯 10: SRV (TLAS)  ← 슬롯 0..9는 UAV
     m_tlasSRV = heap.Allocate();
     RebuildTLASSRV();
 
@@ -614,7 +574,7 @@ void App::BuildDescriptors()
         device->CreateShaderResourceView(m_sphereBLAS.VertexBuffer(), &srvDesc, m_sphereVbSRV.cpu);
     }
 
-    // 슬롯 17: SRV t5 — Phase 4 Importance smooth (R16F)
+    // 슬롯 15: SRV t5 — Phase 4 Importance smooth (R16F)
     //   매 frame ping-pong 으로 Resource() 가 바뀌므로 Render() 에서 SRV 재작성.
     //   Init 시점엔 null SRV (DLSS init 실패 시에도 root sig 매칭은 OK).
     m_importanceSrvNonDLSS = heap.Allocate();
@@ -651,7 +611,6 @@ void App::SwitchScene(uint32_t id)
     m_cameraMoved = true;
     m_accumDirty  = true;  // 씬 내용이 바뀌므로 누적 버퍼 클리어 필요
     m_importanceMap.ResetHistory();  // HPAR-PT Phase 3: importance EMA history 무효화
-    m_reservoirNeedsReset = true;     // HPAR-PT Phase 7: reservoir prev frame 무효화
 
     // GPU 완전 대기
     m_core.FlushGPU();
@@ -1109,33 +1068,11 @@ void App::UpdateSceneCB()
     //   Tier 1 (Î > tierHigh): full PT, reuse 금지 — 현재 동작 그대로
     //   Tier 2 (tierLow < Î ≤ tierHigh): partial reuse — Phase 7 spatial reservoir
     //   Tier 3 (Î ≤ tierLow): aggressive reuse — Phase 7 + Phase 8 temporal
+    //   Phase 6 자체는 RT 셰이더에서 마커만, 실제 reservoir 분기는 Phase 7 에서 활성.
     cb.tierLow  = k_tierLow;
     cb.tierHigh = k_tierHigh;
     cb._pad3a   = 0.0f;
     cb._pad3b   = 0.0f;
-
-    // Phase 7 — Spatial Reservoir Reuse.
-    //   reservoirEnabled : DLSS 모드 + adaptive importance + F5 토글 모두 ON
-    //   reservoirReset   : 첫 frame / 씬 전환 / 큰 카메라 변화 → prev frame 무효화
-    //   reservoirMCap    : history 가 무한 증대되어 ghosting 으로 굳어지지 않도록 상한.
-    // 큰 카메라 변화 감지: prev → cur 의 forward 회전 또는 위치 이동이 임계 초과 시 reset.
-    cb.reservoirEnabled = (cb.adaptiveRayEnabled != 0u && m_reservoirEnabled && m_reservoir[0]) ? 1u : 0u;
-    {
-        // 카메라 변화량 (위치 거리 + forward 코사인)
-        const float dx = pos[0] - m_prevCamPos[0];
-        const float dy = pos[1] - m_prevCamPos[1];
-        const float dz = pos[2] - m_prevCamPos[2];
-        const float posDelta = std::sqrt(dx*dx + dy*dy + dz*dz);
-        const float fwdDot = forward[0] * m_prevCamForward[0]
-                           + forward[1] * m_prevCamForward[1]
-                           + forward[2] * m_prevCamForward[2];
-        const bool bigMove = (posDelta > 0.5f) || (fwdDot < 0.985f);  // 약 10도/0.5m 임계
-        const bool needReset = m_reservoirNeedsReset || bigMove;
-        cb.reservoirReset = needReset ? 1u : 0u;
-        m_reservoirNeedsReset = false;
-    }
-    cb.reservoirMCap = k_reservoirMCap;
-    cb._pad4 = 0u;
 
     // 현재 카메라를 다음 프레임의 "이전 카메라"로 저장
     std::memcpy(m_prevCamPos,     pos,     sizeof(float) * 3);
@@ -1218,17 +1155,6 @@ void App::OnKeyDown(uint32_t key)
                      m_tierDebug ? "ON" : "OFF", k_tierHigh, k_tierLow,
                      m_tierDebug && !m_importanceDebug ? "  ※ F1 도 켜야 화면 표시" : "");
     }
-    else if (key == VK_F5)
-    {
-        // Phase 7 — Spatial Reservoir Reuse 토글 (검증 + Phase 15 ablation).
-        //   OFF: Phase 4-6 동작만 유지 (reservoir UAV 는 바인딩되지만 셰이더가 무시)
-        //   ON : Tier 2/3 에서 prev neighbor RIS combine + 방향 교체 (diffuse approx 보정)
-        m_reservoirEnabled = !m_reservoirEnabled;
-        m_reservoirNeedsReset = true;  // 켜자마자 stale prev 무효화
-        m_accumDirty = true;
-        std::println("[App] Phase 7 Reservoir reuse {} (Tier 2/3 first-bounce direction RIS, M cap={})",
-                     m_reservoirEnabled ? "ON" : "OFF", k_reservoirMCap);
-    }
     else if (key == 'U')
     {
         if (m_dlss.IsAvailable())
@@ -1238,7 +1164,6 @@ void App::OnKeyDown(uint32_t key)
             m_frameCount   = 0;
             m_cameraMoved  = true;
             m_accumDirty   = true;
-            m_reservoirNeedsReset = true;  // Phase 7: DLSS 토글 시 reservoir prev 무효화
             std::println("[App] DLSS {} ({}x{} → {}x{}){}",
                          m_dlssEnabled ? "ON" : "OFF",
                          m_dlss.RenderWidth(), m_dlss.RenderHeight(),
@@ -1330,35 +1255,13 @@ void App::OnRender()
             m_core.Device()->CreateShaderResourceView(m_importanceMap.Resource(), &srv, m_importanceSrvDLSS.cpu);
     }
 
-    // Phase 7 — Reservoir UAV (u10, u11) 매 frame ping-pong 갱신
-    //   readIdx = prev frame 이 썼던 슬롯 (이번 frame 의 in)
-    //   writeIdx = readIdx ^ 1 (이번 frame 의 out, 다음 frame 의 in)
-    if (m_reservoir[0])
-    {
-        const uint32_t readIdx  = m_reservoirReadIdx;
-        const uint32_t writeIdx = readIdx ^ 1u;
-        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
-        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        uav.Format        = DXGI_FORMAT_R32G32B32A32_UINT;
-        // 비DLSS heap (슬롯 10, 11)
-        m_core.Device()->CreateUnorderedAccessView(m_reservoir[readIdx].Get(),  nullptr, &uav, m_reservoirInUAVNonDLSS.cpu);
-        m_core.Device()->CreateUnorderedAccessView(m_reservoir[writeIdx].Get(), nullptr, &uav, m_reservoirOutUAVNonDLSS.cpu);
-        // DLSS heap (슬롯 26, 27)
-        if (m_dlss.ReservoirInMirrorCPU().ptr != 0)
-        {
-            m_core.Device()->CreateUnorderedAccessView(m_reservoir[readIdx].Get(),  nullptr, &uav, m_dlss.ReservoirInMirrorCPU());
-            m_core.Device()->CreateUnorderedAccessView(m_reservoir[writeIdx].Get(), nullptr, &uav, m_dlss.ReservoirOutMirrorCPU());
-        }
-    }
-
     if (m_dlssEnabled && m_dlss.IsAvailable())
     {
         // ── DLSS 경로 ─────────────────────────────────────────────
-        // 디스크립터 테이블 베이스를 힙 슬롯 18 으로 (render-res UAV u0..u11 + SRV 미러)
-        //   비DLSS 가 18 슬롯 (UAV 12 + SRV 6, Phase 7 reservoir 추가) 사용하므로
-        //   DLSS 진입점 = 18.
+        // 디스크립터 테이블 베이스를 힙 슬롯 16 으로 (render-res UAV u0..u9 + SRV 미러)
+        //   비DLSS 의 슬롯 15(importance SRV) 가 추가되어 DLSS 진입은 16 으로 shift
         cmd->SetComputeRootDescriptorTable(0,
-            m_core.CbvSrvUavHeap().GetHandle(18).gpu);
+            m_core.CbvSrvUavHeap().GetHandle(16).gpu);
 
         D3D12_DISPATCH_RAYS_DESC dr{};
         dr.RayGenerationShaderRecord = st.RayGenRange();
@@ -1371,16 +1274,6 @@ void App::OnRender()
 
         // RT 셰이더 쓰기 완료 보장 (renderColor, renderAccum, depth, motionVec, renderNormal)
         m_dlss.UAVBarriers(cmd);
-        // Phase 7 — reservoir out UAV barrier (다음 frame 의 in 으로 사용되기 전 write 완료 보장)
-        {
-            const uint32_t writeIdx = m_reservoirReadIdx ^ 1u;
-            D3D12_RESOURCE_BARRIER b{};
-            b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-            b.UAV.pResource = m_reservoir[writeIdx].Get();
-            cmd->ResourceBarrier(1, &b);
-        }
-        // ping-pong: 다음 frame 은 이번 frame 이 쓴 버퍼를 prev (in) 로 읽음
-        m_reservoirReadIdx ^= 1u;
 
         // HPAR-PT Stage 2 (PASS 1) — Perceptual Importance Map
         //   Phase 1: E (luminance gradient) + D (depth gradient) Sobel 3×3
