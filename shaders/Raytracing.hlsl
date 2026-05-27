@@ -771,15 +771,12 @@ void RayGen()
             // 현재 frame reservoir 출력 (다음 frame 의 neighbor 가 읽음)
             StoreReservoir(idx, r);
 
-            // 방향 교체: Tier 2/3 + diffuse-dominant 표면 + chosen != own 일 때만 적용.
-            //   throughput 보정 = albedo·(1-metallic)·NoL_chosen·W·INV_PI (Lambertian 근사)
-            //   ⚠ metallic surface 는 (1-metallic)≈0 으로 throughput 0 → 검정. 따라서 metallic>0.5
-            //     인 표면 (gold/chrome/etc.) 은 방향 교체 금지 → 평소 specular 경로 유지.
-            //     specular 까지 reuse 하려면 BRDF eval 이 필요하며, Phase 10 (adaptive A-trous)
-            //     또는 별도 specular reservoir 에서 다룬다.
-            bool chosenIsOwn  = (r.dirOct == ownOct);
-            bool isMetalLike  = payload.hitMetallic > 0.5f;
-            if (doReuse && !chosenIsOwn && r.W > 0.0f && !isMetalLike)
+            // 방향 교체: Tier 2/3 에서 chosen != own 일 때만 적용
+            //   diffuse approximation throughput 보정: albedo·(1-metallic)·NoL_chosen·W / π
+            //   (path tracer ClosestHit 의 풀 BRDF·MIS attenuation 을 단순 Lambertian 으로 대체)
+            //   ※ Tier 1 / glass / Tier 2-3 의 specular 영역에는 영향 없음 (else 분기로 own 유지)
+            bool chosenIsOwn = (r.dirOct == ownOct);
+            if (doReuse && !chosenIsOwn && r.W > 0.0f)
             {
                 float NoL_c = saturate(dot(N, chosenDir));
                 float3 diffAlbedo = payload.hitAlbedo * (1.0f - payload.hitMetallic);
@@ -788,7 +785,7 @@ void RayGen()
             }
             else
             {
-                throughput *= payload.attenuation;  // 평소 경로 (Tier 1 / chosen==own / metallic)
+                throughput *= payload.attenuation;  // 평소 경로 (Tier 1 또는 chosen == own)
             }
         }
         else
