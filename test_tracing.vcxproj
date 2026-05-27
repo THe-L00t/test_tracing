@@ -55,7 +55,7 @@
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)third_party\dlss\include;$(ProjectDir)third_party\nrd\include;$(ProjectDir)third_party\nrd\shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>Disabled</Optimization>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
@@ -63,8 +63,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;nvsdk_ngx_d_dbg.lib;NRD.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)third_party\dlss\lib;$(ProjectDir)third_party\nrd\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
@@ -75,7 +74,7 @@
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)third_party\dlss\include;$(ProjectDir)third_party\nrd\include;$(ProjectDir)third_party\nrd\shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -85,8 +84,7 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;nvsdk_ngx_d.lib;NRD.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)third_party\dlss\lib;$(ProjectDir)third_party\nrd\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;dxcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
@@ -101,13 +99,6 @@
     <ClCompile Include="src\DescriptorHeap.cpp" />
     <ClCompile Include="src\RenderTarget.cpp" />
     <ClCompile Include="src\TextOverlay.cpp" />
-    <ClCompile Include="src\Denoiser.cpp" />
-    <ClCompile Include="src\SVGFDenoiser.cpp" />
-    <ClCompile Include="src\DLSSIntegration.cpp" />
-    <ClCompile Include="src\NRDDenoiser.cpp" />
-    <ClCompile Include="src\ImportanceMapPass.cpp" />
-    <ClCompile Include="src\ImportanceVisualizePass.cpp" />
-    <ClCompile Include="src\MotionVectorReusePass.cpp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -121,35 +112,17 @@
     <ClInclude Include="src\RenderTarget.h" />
     <ClInclude Include="src\Common.h" />
     <ClInclude Include="src\TextOverlay.h" />
-    <ClInclude Include="src\Denoiser.h" />
-    <ClInclude Include="src\SVGFDenoiser.h" />
-    <ClInclude Include="src\DLSSIntegration.h" />
-    <ClInclude Include="src\NRDDenoiser.h" />
-    <ClInclude Include="src\ImportanceMapPass.h" />
-    <ClInclude Include="src\ImportanceVisualizePass.h" />
-    <ClInclude Include="src\MotionVectorReusePass.h" />
-    <ClInclude Include="src\ShaderCompile.h" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="shaders\Raytracing.hlsl" />
-    <None Include="shaders\Denoise.hlsl" />
-    <None Include="shaders\SVGFTemporalAccum.hlsl" />
-    <None Include="shaders\SVGFWavelet.hlsl" />
-    <None Include="shaders\ImportanceMap.hlsl" />
-    <None Include="shaders\ImportanceVisualize.hlsl" />
-    <None Include="shaders\MetricHistogram.hlsl" />
-    <None Include="shaders\MetricReduce.hlsl" />
-    <None Include="shaders\ImportanceEMA.hlsl" />
-    <None Include="shaders\MotionVectorReuse.hlsl" />
   </ItemGroup>
 
   <!-- dxcompiler.dll / dxil.dll: DXR 런타임 셰이더 컴파일에 필요 -->
-  <!-- nvngx_dlss.dll: DLSS SR 런타임 / nvngx_dlssd.dll: DLSS RR (Ray Reconstruction) 런타임 -->
   <ItemDefinitionGroup>
     <PostBuildEvent>
-      <Command>copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxcompiler.dll" "$(OutDir)dxcompiler.dll" &amp; copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxil.dll" "$(OutDir)dxil.dll" &amp; if exist "$(ProjectDir)third_party\dlss\bin\nvngx_dlss.dll" copy /y "$(ProjectDir)third_party\dlss\bin\nvngx_dlss.dll" "$(OutDir)nvngx_dlss.dll" &amp; if exist "$(ProjectDir)third_party\dlss\bin\nvngx_dlssd.dll" copy /y "$(ProjectDir)third_party\dlss\bin\nvngx_dlssd.dll" "$(OutDir)nvngx_dlssd.dll" &amp; if exist "$(ProjectDir)third_party\nrd\bin\NRD.dll" copy /y "$(ProjectDir)third_party\nrd\bin\NRD.dll" "$(OutDir)NRD.dll"</Command>
-      <Message>DXC / DLSS / NRD DLL 복사 중...</Message>
+      <Command>copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxcompiler.dll" "$(OutDir)dxcompiler.dll" &amp; copy /y "$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxil.dll" "$(OutDir)dxil.dll"</Command>
+      <Message>DXC 런타임 DLL 복사 중...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
 

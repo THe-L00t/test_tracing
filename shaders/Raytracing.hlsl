@@ -23,20 +23,6 @@
 // ── 리소스 ──────────────────────────────────────────────────────
 RWTexture2D<float4>             g_output       : register(u0);
 RWTexture2D<float4>             g_accumulation : register(u1);
-RWTexture2D<float>              g_depth        : register(u2); // NDC depth [0..1] (DLSS용)
-RWTexture2D<float2>             g_motionVec    : register(u3); // 모션벡터 픽셀 단위 (DLSS용) / 비DLSS: oct-법선
-RWTexture2D<float4>             g_normals      : register(u4); // world-법선(xyz) + roughness(w) (A-trous·DLSS-RR Packed 공용)
-RWTexture2D<float4>             g_diffAlbedo   : register(u5); // DLSS-RR diffuse albedo (linear) — albedo*(1-metallic)
-RWTexture2D<float4>             g_specAlbedo   : register(u6); // DLSS-RR specular F0 (linear)  — lerp(0.04, albedo, metallic)
-
-// ── NRD 입력 (DLSS 경로 전용) ──────────────────────────────────────
-// NRD RELAX_DIFFUSE_SPECULAR 는 primary hit 에서 lobe-separated radiance + first-bounce hitDist 를
-// 요구한다. 1spp probabilistic lobe selection: primary 에서 diff/spec 중 하나만 샘플 → 해당 버퍼로.
-// 나머지 버퍼는 0 으로 두고 NRD가 neighbor 에서 reconstruct (HitDistanceReconstructionMode::AREA_3X3).
-RWTexture2D<float4>             g_diffRadianceHitDist : register(u7); // RGBA16F: rgb=diff radiance, w=hitDist
-RWTexture2D<float4>             g_specRadianceHitDist : register(u8); // RGBA16F: rgb=spec radiance, w=hitDist
-RWTexture2D<float>              g_viewZ               : register(u9); // R16F  : linear view-space Z (primary)
-
 RaytracingAccelerationStructure g_tlas         : register(t0);
 
 struct VertexPN { float3 pos; float3 normal; };
@@ -44,10 +30,6 @@ StructuredBuffer<VertexPN> g_vbPlane   : register(t1);
 StructuredBuffer<VertexPN> g_vbCube    : register(t2);
 StructuredBuffer<VertexPN> g_vbRoom    : register(t3);
 StructuredBuffer<VertexPN> g_vbSphere  : register(t4);
-
-// HPAR-PT Phase 4 — Perceptual Importance smooth output (R16F)
-//   adaptiveRayEnabled=0 인 비DLSS 모드에서는 사용 안 함 (stale 값 OK).
-Texture2D<float>           g_importance : register(t5);
 
 cbuffer SceneConstants : register(b0)
 {
@@ -65,24 +47,8 @@ cbuffer SceneConstants : register(b0)
     float4 matMetallic;             // .xyzw = metallic per mat
     float4 matEmissive;             // .xyzw = emissive signal
 
-    uint   frameCount;  uint   randomSeed;  float  emissBoxHalfSize; float jitterX;
-    float3 emissBoxCenter;  float jitterY;
-
-    // 이전 프레임 카메라 (DLSS 모션벡터 계산용)
-    float3 prevCamPos;     uint   isDLSSMode;
-    float3 prevCamRight;   float  prevTanHalfFovY;
-    float3 prevCamUp;      float  prevAspectRatio;
-    float3 prevCamForward; uint   adaptiveRayEnabled;  // Phase 4
-
-    // Phase 4 — Adaptive Ray Allocation
-    uint   rMin;           uint   rMax;
-    float  gamma;          float  _pad2;
-
-    // Phase 6 — Tier 분류 (PHTR 통합)
-    //   tier = (Î > tierHigh) ? 1 : (Î > tierLow) ? 2 : 3
-    //   Tier 1: full PT (현 동작)  Tier 2: partial reuse  Tier 3: aggressive reuse
-    float  tierLow;        float  tierHigh;
-    float  _pad3a;         float  _pad3b;
+    uint   frameCount;  uint   randomSeed;  float  emissBoxHalfSize; float _cbPad1;
+    float3 emissBoxCenter;  float _cbPad2;
 }
 
 // ── 상수 ────────────────────────────────────────────────────────
@@ -102,14 +68,6 @@ struct RayPayload
     uint   seed;
     uint   depth;
     uint   terminated;
-    float  hitDist;         // 1차 히트 거리 (depth/motion 계산용, depth==0일 때만 유효)
-    float3 hitNormal;       // 1차 히트 월드 법선 (A-trous 엣지 스토핑용, depth==0일 때만 유효)
-    float  hitRoughness;    // 1차 히트 GGX 러프니스 (DLSS-RR normals.w 패킹용)
-    float3 hitAlbedo;       // 1차 히트 albedo (DLSS-RR diffuse/specular 분리용)
-    float  hitMetallic;     // 1차 히트 metallic (DLSS-RR F0 보간 계수)
-    // NRD 라우팅 — primary hit (depth==0) 에서 결정
-    uint   primaryLobeIsSpec; // 0=diff lobe, 1=spec lobe (NRD radiance 버퍼 라우팅용)
-    float  firstBounceHitDist;// primary→secondary 거리 (NRD hitDist, primary hit 거리 제외)
 };
 
 struct ShadowPayload { float vis; };
@@ -128,16 +86,6 @@ float RandFloat(inout uint s)
 {
     s = WangHash(s);
     return float(s & 0x00FFFFFFu) / float(0x01000000u);
-}
-
-// ── Oct-인코딩 (월드 법선 → float2 [-1,1]^2) ────────────────────
-float2 OctEncode(float3 n)
-{
-    float3 o = n / (abs(n.x) + abs(n.y) + abs(n.z) + 1e-8f);
-    float2 r;
-    r.x = (o.z < 0.0f) ? ((1.0f - abs(o.y)) * (o.x >= 0.0f ? 1.0f : -1.0f)) : o.x;
-    r.y = (o.z < 0.0f) ? ((1.0f - abs(o.x)) * (o.y >= 0.0f ? 1.0f : -1.0f)) : o.y;
-    return r;
 }
 
 // ── ONB (법선 기반 접선 공간) ────────────────────────────────────
@@ -252,8 +200,7 @@ float MISWeight(float pdf_a, float pdf_b)
 float3 SampleBRDF(float3 N, float3 V,
                   float3 albedo, float metallic, float roughness,
                   inout uint seed,
-                  out float3 attenuation, out float pdf,
-                  out uint  outIsSpecLobe)   // 선택된 lobe (0=diff, 1=spec) — NRD 라우팅용
+                  out float3 attenuation, out float pdf)
 {
     float alpha  = max(roughness * roughness, 0.001f);
     float alpha2 = alpha * alpha;
@@ -270,7 +217,6 @@ float3 SampleBRDF(float3 N, float3 V,
     {
         float2 u   = float2(RandFloat(seed), RandFloat(seed));
         scatterDir = SampleGGX_VNDF(u, alpha, V, N, VdotH);
-        outIsSpecLobe = 1u;
     }
     else
     {
@@ -278,7 +224,6 @@ float3 SampleBRDF(float3 N, float3 V,
         scatterDir = CosineSampleHemisphere(u, N);
         float3 H   = normalize(V + scatterDir);
         VdotH      = max(dot(V, H), 0.0001f);
-        outIsSpecLobe = 0u;
     }
 
     float  NdotL = max(dot(N, scatterDir), 0.0001f);
@@ -454,15 +399,9 @@ void RayGen()
 
     uint seed = WangHash(idx.x + idx.y * dim.x + randomSeed * 719393u);
 
-    float2 dlssJ = float2(jitterX, jitterY);
-    // DLSS 모드: Halton 지터만 사용.
-    // aaJ를 더하면 실제 레이 위치가 DLSS에 전달한 jitter와 달라져
-    // depth·motion 불일치 → 고스팅·시간적 누적 오류가 발생한다.
-    // 비DLSS 모드: dlssJ=(0,0)이므로 aaJ만 유효.
-    float2 aaJ = float2(0.0f, 0.0f);
-    if (!isDLSSMode)
-        aaJ = float2(RandFloat(seed), RandFloat(seed)) - 0.5f;
-    float2 uv = ((float2)idx + 0.5f + dlssJ + aaJ) / (float2)dim;
+    // 서브픽셀 지터 (안티에일리어싱)
+    float2 jitter = float2(RandFloat(seed), RandFloat(seed)) - 0.5f;
+    float2 uv     = ((float2)idx + 0.5f + jitter) / (float2)dim;
     float2 ndc    = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
 
     float3 dir = normalize(
@@ -480,24 +419,7 @@ void RayGen()
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     float3 radiance   = float3(0.0f, 0.0f, 0.0f);
 
-    // NRD 라우팅 (cross-bounce 누적, payload 가 매 bounce 새로 생성되므로 별도 변수로 보관)
-    uint   nrdPrimaryLobeIsSpec  = 0u;
-    float  nrdFirstBounceHitDist = 0.0f;
-    float  nrdViewZ              = 0.0f;
-
-    // Phase 4 — Adaptive Ray Allocation: per-pixel maxBounce 결정
-    //   R_i = R_min + (R_max - R_min) · Î^γ
-    //   비DLSS 모드(adaptiveRayEnabled=0) 또는 importance 미할당 시 k_maxBounce 유지
-    uint maxBounce = k_maxBounce;
-    if (adaptiveRayEnabled != 0u)
-    {
-        float I = g_importance.Load(int3((int2)idx, 0));
-        float r = (float)rMin + ((float)rMax - (float)rMin) * pow(saturate(I), gamma);
-        maxBounce = max(1u, (uint)round(r));
-        maxBounce = min(maxBounce, k_maxBounce);  // hard upper bound 안전망
-    }
-
-    for (uint bounce = 0u; bounce < maxBounce; bounce++)
+    for (uint bounce = 0u; bounce < k_maxBounce; bounce++)
     {
         RayPayload payload;
         payload.emission      = float3(0.0f, 0.0f, 0.0f);
@@ -508,89 +430,11 @@ void RayGen()
         payload.seed          = seed;
         payload.depth         = bounce;
         payload.terminated    = 0u;
-        payload.hitDist       = ray.TMax;
-        payload.hitNormal     = float3(0.0f, 1.0f, 0.0f);  // 미스 시 기본값 (up)
-        payload.hitRoughness  = 1.0f;                        // 미스 시 기본값 (fully rough)
-        payload.hitAlbedo     = float3(0.0f, 0.0f, 0.0f);    // 미스 시: 스카이/배경 (diffuse·specular=0)
-        payload.hitMetallic   = 0.0f;
-        payload.primaryLobeIsSpec  = 0u;
-        payload.firstBounceHitDist = 0.0f;
 
         TraceRay(g_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
 
         seed = payload.seed;
         radiance += throughput * payload.emission;
-
-        // 1차 히트: depth 항상 기록, motion(DLSS) 또는 oct-normal(비DLSS) 기록
-        if (bounce == 0u)
-        {
-            // NRD 라우팅: primary lobe 캡처 (ClosestHit 에서 설정)
-            nrdPrimaryLobeIsSpec = payload.primaryLobeIsSpec;
-
-            float t = payload.hitDist;
-            // 뷰 공간 Z: 레이 방향과 광축(camForward) 사이 코사인 보정
-            // unnorm 길이의 역수 = cos(시야각) → viewZ = t / length(unnorm)
-            float2 pxUV  = ((float2)idx + 0.5f) / (float2)dim;
-            float2 pxNDC = float2(pxUV.x * 2.0f - 1.0f, 1.0f - pxUV.y * 2.0f);
-            float3 unnorm = camForward
-                          + camRight * (pxNDC.x * aspectRatio * tanHalfFovY)
-                          + camUp    * (pxNDC.y * tanHalfFovY);
-            float viewZ = t / length(unnorm);  // view-space Z (cos(θ) 보정)
-            nrdViewZ = viewZ;  // NRD IN_VIEWZ 출력용
-            const float nearZ = 0.1f, farZ = 1000.0f;
-            float ndcZ = saturate(farZ * (viewZ - nearZ) / (viewZ * (farZ - nearZ)));
-            g_depth[idx] = ndcZ;  // 항상 기록 (DLSS + A-trous 공용)
-
-            // world-법선(xyz) + roughness(w): 항상 u4(g_normals)에 기록 — DLSS-RR Packed 모드 + A-trous 공용
-            // DLSS-RR 사양: normals.xyz = world-space normal, normals.w = roughness (Packed Roughness)
-            // ※ oct-encoding을 .xy 에 넣으면 DLSS-RR이 (octX, octY, 0) 을 잘못된 3D 법선으로 해석하여
-            //    구 표면에 octahedral seam(다이아몬드 십자) 아티팩트 발생.
-            g_normals[idx] = float4(payload.hitNormal, payload.hitRoughness);
-
-            // DLSS-RR GBuffer: diffuse albedo + specular F0 (Schlick 모델)
-            //   diffuse  = albedo · (1 - metallic)         (금속은 diffuse 가 거의 0)
-            //   specular = lerp(0.04, albedo, metallic)    (유전체 F0=0.04, 금속 F0=albedo tint)
-            const float3 dielectricF0 = float3(0.04f, 0.04f, 0.04f);
-            float3 diff = payload.hitAlbedo * (1.0f - payload.hitMetallic);
-            float3 spec = lerp(dielectricF0, payload.hitAlbedo, payload.hitMetallic);
-            g_diffAlbedo[idx] = float4(diff, 1.0f);
-            g_specAlbedo[idx] = float4(spec, 1.0f);
-
-            if (isDLSSMode)
-            {
-                // DLSS: 렌더 해상도 픽셀 단위 모션벡터
-                // ※ DLSS 사양: MV 는 표면의 모션만 표현해야 하며 jitter 오프셋을 포함하면 안 된다.
-                //    hitW 는 jittered ray 가 hit한 월드 포인트라 prevUV ≈ (idx+0.5+jitter)/dim
-                //    이 된다. 따라서 (prevUV - (idx+0.5)/dim)*dim 은 정적 씬에서도 ≈ jitter 라는
-                //    가짜 모션을 생성 → RR 이 매 프레임 다른 위치로 재학습해 "종이 구겨짐"
-                //    아티팩트 유발. mv 에서 현재 jitter 를 빼주어 정적 씬에서 mv≈0 보장.
-                float3 hitW   = ray.Origin + ray.Direction * t;
-                float3 pLocal = hitW - prevCamPos;
-                float  pz     = dot(pLocal, prevCamForward);
-                float2 mv     = float2(0.0f, 0.0f);
-                if (pz > 0.001f)
-                {
-                    float px = dot(pLocal, prevCamRight);
-                    float py = dot(pLocal, prevCamUp);
-                    float prevNdcX = px / (pz * prevAspectRatio  * prevTanHalfFovY);
-                    float prevNdcY = py / (pz * prevTanHalfFovY);
-                    float2 prevUV  = float2(prevNdcX * 0.5f + 0.5f,
-                                            1.0f - (prevNdcY * 0.5f + 0.5f));
-                    float2 currUV  = ((float2)idx + 0.5f) / (float2)dim;
-                    mv = (prevUV - currUV) * (float2)dim - float2(jitterX, jitterY);
-                }
-                g_motionVec[idx] = mv;
-            }
-            // 비DLSS에서는 u3(motionVec) 미사용. 슬롯 3·4가 같은 m_gbufferNormal 리소스를
-            // 가리키므로 u3에 별도 기록 시 u4(world-normal+roughness)와 race condition 발생.
-        }
-
-        // NRD: secondary hit 거리 (bounce 1) 캡처 — primary hit 거리 제외
-        //   ClosestHit 에서 depth==1 일 때 payload.firstBounceHitDist 에 RayTCurrent() 기록함
-        if (bounce == 1u)
-        {
-            nrdFirstBounceHitDist = payload.firstBounceHitDist;
-        }
 
         if (payload.terminated != 0u) break;
 
@@ -610,40 +454,10 @@ void RayGen()
         ray.TMax      = 1e6f;
     }
 
-    // ── NRD 입력 버퍼 출력 (probabilistic lobe routing) ─────────────
-    //   1spp 에서 primary hit lobe 가 spec 이면 spec 버퍼로, 아니면 diff 버퍼로.
-    //   다른 버퍼는 (0, hitDist) 로 — NRD HitDistanceReconstructionMode::AREA_3X3 가
-    //   neighbor 에서 보간한다. radiance 에 firefly clamp 한 번 더 적용 (NRD 안정성).
-    {
-        float3 nrdRadiance = radiance;
-        float  lum         = dot(nrdRadiance, float3(0.2126f, 0.7152f, 0.0722f));
-        const float maxLumNRD = 16.0f;
-        if (lum > maxLumNRD) nrdRadiance *= (maxLumNRD / lum);
-
-        float diffHitDist = (nrdPrimaryLobeIsSpec == 0u) ? nrdFirstBounceHitDist : 0.0f;
-        float specHitDist = (nrdPrimaryLobeIsSpec == 1u) ? nrdFirstBounceHitDist : 0.0f;
-        float3 diffRad    = (nrdPrimaryLobeIsSpec == 0u) ? nrdRadiance : float3(0.0f, 0.0f, 0.0f);
-        float3 specRad    = (nrdPrimaryLobeIsSpec == 1u) ? nrdRadiance : float3(0.0f, 0.0f, 0.0f);
-
-        g_diffRadianceHitDist[idx] = float4(diffRad, diffHitDist);
-        g_specRadianceHitDist[idx] = float4(specRad, specHitDist);
-        g_viewZ[idx]               = nrdViewZ;
-    }
-
     // 시간적 누적 (프레임당 1spp)
     float3 accumulated;
     if (frameCount == 0u)
-    {
-        // DLSS-RR 입력 분산 안정화: firefly clamping
-        //   1spp brute-force MIS PT 의 specular/caustics 경로에서 발생하는 극단값(>16)을
-        //   휘도 기준으로 클램프. 본질적 노이즈는 줄지 않지만 매 프레임 튀는 극단값이
-        //   사라져 RR transformer 의 history rejection 빈도가 감소 → paper crumpled 완화.
-        //   (NVIDIA RTXPT 샘플도 firefly 가드를 권장)
-        float lum = dot(radiance, float3(0.2126f, 0.7152f, 0.0722f));
-        const float maxLum = 16.0f;
-        if (lum > maxLum) radiance *= (maxLum / lum);
         accumulated = radiance;
-    }
     else
         accumulated = lerp(g_accumulation[idx].rgb, radiance, 1.0f / float(frameCount + 1u));
 
@@ -659,8 +473,6 @@ void RayGen()
 [shader("miss")]
 void MissShader(inout RayPayload payload)
 {
-    // payload.hitDist 는 RayGen 에서 ray.TMax 로 미리 초기화됨 → 별도 기록 불필요
-
     float3 d = normalize(WorldRayDirection());
 
     if (sceneID == 0)
@@ -729,40 +541,6 @@ void ClosestHit(inout RayPayload payload,
     float  roughness = matAlbedoRoughness[matIdx].w;
     float  emissive  = matEmissive[matIdx];
 
-    // NRD: primary→secondary hitDist 는 depth==1 의 RayTCurrent (primary hit 거리 제외)
-    if (payload.depth == 1u && payload.firstBounceHitDist == 0.0f) {
-        payload.firstBounceHitDist = RayTCurrent();
-    }
-
-    if (payload.depth == 0u) {
-        payload.hitDist      = RayTCurrent();
-        payload.hitNormal    = N;  // 뷰-향 보정 후 법선 (A-trous 엣지 스토핑용)
-
-        // DLSS-RR demodulation 인코딩 (재질별 분기)
-        //   RR 은 raw HDR 을 (diff + spec·F) 로 demodulate 한 뒤 transformer 로 lighting 만
-        //   디노이즈한다. diffuse 가정 모델과 specular(mirror) 가정 모델이 달라서
-        //   transmissive 표면은 metallic+low-roughness 로 보내 specular 경로를 타게 해야
-        //   굴절·반사가 temporal blur 없이 보존된다.
-        if (emissive < -1.5f) {
-            // 유리(투명): metallic=1, roughness=0 → RR specular(mirror) temporal model 활성화
-            //   F0=albedo, diff=0 이 되며 굴절된 raw HDR 이 metal 경로로 보존된다.
-            payload.hitAlbedo    = albedo;
-            payload.hitMetallic  = 1.0f;
-            payload.hitRoughness = 0.0f;
-        } else if (emissive < -0.5f) {
-            // 반투명: diff 를 낮춰 demodulation 영향을 줄이고 spec=0.04 dielectric 유지
-            //   diff=albedo 전체면 RR 이 디퓨즈 표면처럼 temporal blur → 불투명화
-            payload.hitAlbedo    = albedo * 0.3f;
-            payload.hitMetallic  = 0.0f;
-            payload.hitRoughness = roughness;
-        } else {
-            // 일반 PBR (불투명·발광체): 원래 값 그대로
-            payload.hitAlbedo    = albedo;
-            payload.hitMetallic  = metallic;
-            payload.hitRoughness = roughness;
-        }
-    }
-
     uint seed = payload.seed;
 
     // ── 유리 / 반투명 (기존 로직 유지, scatterPdf=0 표기) ────────
@@ -786,9 +564,6 @@ void ClosestHit(inout RayPayload payload,
             float3 scatterDir = (tir || RandFloat(seed) < fresnel)
                 ? reflect(inc, N)
                 : refracted;
-
-            // NRD: 유리는 specular(굴절/반사) 경로 — primary 라우팅 spec
-            if (payload.depth == 0u) payload.primaryLobeIsSpec = 1u;
 
             payload.emission      = float3(0.0f, 0.0f, 0.0f);
             payload.attenuation   = albedo;
@@ -834,9 +609,6 @@ void ClosestHit(inout RayPayload payload,
                 payload.emission = float3(0.0f, 0.0f, 0.0f);
             }
 
-            // NRD: 반투명은 diffuse-dominant 경로
-            if (payload.depth == 0u) payload.primaryLobeIsSpec = 0u;
-
             payload.attenuation   = atten;
             payload.nextOrigin    = hitPos + scatterDir * 0.001f;
             payload.nextDirection = scatterDir;
@@ -850,8 +622,6 @@ void ClosestHit(inout RayPayload payload,
     // ── 발광체 처리 (MIS 가중치) ─────────────────────────────────
     if (emissive > 0.0f)
     {
-        // NRD: primary 히트가 발광체면 diffuse-emission 으로 라우팅
-        if (payload.depth == 0u) payload.primaryLobeIsSpec = 0u;
         // 면적광(emissive box)을 BRDF 샘플로 간접 적중:
         // NEE가 이미 직접광을 계산했으므로 MIS 가중치로 이중 계산 방지
         if (emissBoxHalfSize > 0.0f && geomType == 1u
@@ -881,16 +651,8 @@ void ClosestHit(inout RayPayload payload,
     // ── BRDF 샘플링 (GGX + Lambertian 혼합) ─────────────────────
     float3 attenuation;
     float  scatterPdf;
-    uint   isSpecLobe;
     float3 scatterDir = SampleBRDF(N, V, albedo, metallic, roughness,
-                                   seed, attenuation, scatterPdf, isSpecLobe);
-
-    // NRD: primary hit (depth==0) 의 lobe 선택을 기록하여 RayGen 에서
-    //      radiance 를 diff/spec 버퍼 중 하나로 라우팅하게 한다.
-    if (payload.depth == 0u)
-    {
-        payload.primaryLobeIsSpec = isSpecLobe;
-    }
+                                   seed, attenuation, scatterPdf);
 
     if (dot(scatterDir, N) <= 0.0f)
     {

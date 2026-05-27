@@ -68,39 +68,35 @@ namespace
 
 // ---------------------------------------------------------------
 // 글로벌 루트 시그니처
-// 파라미터 0: 디스크립터 테이블 (UAV×5 at offset 0, SRV×5 at offset 5)
-//   힙 슬롯 0: UAV u0 (g_output,       RGBA8     — 최종 색상)
-//   힙 슬롯 1: UAV u1 (g_accumulation, RGBA32F   — HDR 누적)
-//   힙 슬롯 2: UAV u2 (g_depth,        R32_FLOAT — NDC depth)
-//   힙 슬롯 3: UAV u3 (g_motionVec,    RG16F     — DLSS MV / 비DLSS oct-법선)
-//   힙 슬롯 4: UAV u4 (g_normals,      RG16F     — oct-법선 항상 기록, A-trous 공용)
-//   힙 슬롯 5: SRV t0 (TLAS)
-//   힙 슬롯 6: SRV t1 (plane VB)
-//   힙 슬롯 7: SRV t2 (cube VB)
-//   힙 슬롯 8: SRV t3 (room VB)
-//   힙 슬롯 9: SRV t4 (sphere VB)
+// 파라미터 0: 디스크립터 테이블
+//   힙 슬롯 0: UAV u0 (g_output,       RGBA8)
+//   힙 슬롯 1: UAV u1 (g_accumulation, RGBA32F)
+//   힙 슬롯 2: SRV t0 (TLAS)
+//   힙 슬롯 3: SRV t1 (plane VB)
+//   힙 슬롯 4: SRV t2 (cube VB)
+//   힙 슬롯 5: SRV t3 (room VB)
+//   힙 슬롯 6: SRV t4 (sphere VB)
 // 파라미터 1: 인라인 루트 CBV b0 (씬 상수)
 // ---------------------------------------------------------------
 ComPtr<ID3D12RootSignature> CreateGlobalRootSignature(ID3D12Device* device)
 {
     // 파라미터 0: 디스크립터 테이블
-    //   Range 0: UAV 10개 (u0..u9) - 출력+누적+depth+motionVec+normals+diffAlbedo+specAlbedo
-    //                                + NRD: diffRadHit + specRadHit + viewZ
-    //   Range 1: SRV 5개 (t0..t4) - TLAS + VB 4개
+    //   Range 0: UAV 2개 (u0, u1) - 출력 + 누적 버퍼
+    //   Range 1: SRV 4개 (t0..t3) - TLAS + VB 3개
     D3D12_DESCRIPTOR_RANGE1 ranges[2]{};
 
     ranges[0].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    ranges[0].NumDescriptors                    = 10;  // u0-u9 (u7~u9: NRD inputs)
+    ranges[0].NumDescriptors                    = 2;   // u0(output) + u1(accumulation)
     ranges[0].BaseShaderRegister                = 0;
     ranges[0].RegisterSpace                     = 0;
     ranges[0].OffsetInDescriptorsFromTableStart = 0;
     ranges[0].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     ranges[1].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    ranges[1].NumDescriptors                    = 6;   // t0(TLAS) + t1..t4(VB×4) + t5(Phase 4 importance)
+    ranges[1].NumDescriptors                    = 5;   // t0(TLAS) + t1(plane) + t2(cube) + t3(room) + t4(sphere)
     ranges[1].BaseShaderRegister                = 0;
     ranges[1].RegisterSpace                     = 0;
-    ranges[1].OffsetInDescriptorsFromTableStart = 10;  // 힙 슬롯 10부터 (UAV 10개 다음)
+    ranges[1].OffsetInDescriptorsFromTableStart = 2;   // 힙 슬롯 2부터 (UAV 2개 다음)
     ranges[1].Flags                             = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
 
     D3D12_ROOT_PARAMETER1 params[2]{};
@@ -161,12 +157,10 @@ void DXRPipeline::Init(ID3D12Device5* device, ID3D12RootSignature* globalRootSig
     hitGroup.ClosestHitShaderImport = L"ClosestHit";
 
     // 3. 셰이더 설정
-    //    RayPayload: float3×4 + float(scatterPdf) + uint×3 + float(hitDist) + float3(hitNormal)
-    //              + float(hitRoughness) + float3(hitAlbedo) + float(hitMetallic)
-    //              + uint(primaryLobeIsSpec) + float(firstBounceHitDist) = 108 bytes
+    //    RayPayload: float3×4 + float(scatterPdf) + uint×3 = 48+4+12 = 64 bytes
     //    ShadowPayload: float = 4 bytes
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig{};
-    shaderConfig.MaxPayloadSizeInBytes   = 108;  // RayPayload 크기 (NRD primary lobe + firstBounceHitDist 추가)
+    shaderConfig.MaxPayloadSizeInBytes   = 64;  // RayPayload 크기
     shaderConfig.MaxAttributeSizeInBytes = sizeof(float) * 2;  // 배리센트릭
 
     // 4. 파이프라인 설정
