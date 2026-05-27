@@ -258,7 +258,9 @@ void MotionVectorReusePass::Apply(ID3D12GraphicsCommandList* cmdList,
     writeSrv(2, motionVec,    DXGI_FORMAT_R16G16_FLOAT);
     writeSrv(3, prevDepth,    DXGI_FORMAT_R32_FLOAT);
     writeSrv(4, prevNormal,   DXGI_FORMAT_R16G16B16A16_FLOAT);
-    writeSrv(5, prevRadiance, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    // m_radianceHistory 자원은 m_dlss.RenderAccum 과 동일 포맷 (RGBA32F) 이어야 CopyResource 가능.
+    // SRV 도 반드시 자원 포맷과 일치 — RGBA16F SRV 지정 시 비트 깊이 불일치로 device removed.
+    writeSrv(5, prevRadiance, DXGI_FORMAT_R32G32B32A32_FLOAT);
     writeSrv(6, importance,   DXGI_FORMAT_R16_FLOAT);
 
     // ── 3. 입력 자원들 transition ───────────────────────────────
