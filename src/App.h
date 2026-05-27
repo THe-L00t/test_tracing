@@ -10,6 +10,7 @@
 #include "NRDDenoiser.h"
 #include "ImportanceMapPass.h"
 #include "ImportanceVisualizePass.h"
+#include "MotionVectorReusePass.h"
 #include <chrono>
 
 class App
@@ -104,6 +105,20 @@ private:
     static constexpr float   k_tierLow  = 0.30f;  // Î ≤ 0.30 → Tier 3
     static constexpr float   k_tierHigh = 0.70f;  // Î >  0.70 → Tier 1
     bool                     m_tierDebug = false;
+
+    // Phase 7 (재정의) — Motion Vector Radiance Reuse (Tier 2 전용)
+    //   architecture-only: Phase 12 composite wiring 전엔 시각적 효과 없음.
+    //   exclusivity: 출력 reusedRadiance/validMask 는 composite 의 input.
+    //   - m_radianceHistory: prev frame PT radiance (RGBA16F render-res, m_dlss.RenderAccum 복사)
+    //   - m_depthHistory   : prev frame NDC depth   (R32F render-res)
+    //   - m_normalHistory  : prev frame world-법선+roughness (RGBA16F render-res)
+    //   매 frame OnRender 끝에 CopyResource 로 current → history 갱신.
+    MotionVectorReusePass    m_motionVectorReuse;
+    ComPtr<ID3D12Resource>   m_radianceHistory;
+    ComPtr<ID3D12Resource>   m_depthHistory;
+    ComPtr<ID3D12Resource>   m_normalHistory;
+    bool                     m_reuseEnabled = false;  // F5 토글
+    bool                     m_reuseDebug   = false;  // F6 — valid mask 시각화
 
     // 이전 프레임 카메라 (모션벡터 계산용, UpdateSceneCB 끝에 갱신)
     float m_prevCamPos[3]     = {};

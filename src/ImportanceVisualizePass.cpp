@@ -136,7 +136,8 @@ void ImportanceVisualizePass::Shutdown()
 }
 
 void ImportanceVisualizePass::Apply(ID3D12GraphicsCommandList* cmdList,
-                                     ID3D12Resource* importance)
+                                     ID3D12Resource* importance,
+                                     DXGI_FORMAT     srvFormat)
 {
     // CB update
     VisCB cb{};
@@ -153,11 +154,11 @@ void ImportanceVisualizePass::Apply(ID3D12GraphicsCommandList* cmdList,
     auto cpu = m_descHeap->GetCPUDescriptorHandleForHeapStart();
     auto gpu = m_descHeap->GetGPUDescriptorHandleForHeapStart();
 
-    // slot 0 SRV importance
+    // slot 0 SRV importance (또는 Phase 7 reuse mask R8_UNORM)
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srv.Format = DXGI_FORMAT_R16_FLOAT;
+        srv.Format = srvFormat;
         srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv.Texture2D.MipLevels = 1;
         m_device->CreateShaderResourceView(importance, &srv, cpu);

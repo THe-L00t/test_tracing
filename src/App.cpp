@@ -336,6 +336,40 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
                                  m_dlss.RenderWidth(), m_dlss.RenderHeight());
             std::println("[App] HPAR-PT Importance Map (Phase 1: E+D) 활성화 — F1 키로 시각화");
         }
+
+        // Phase 7 (재정의) — Motion Vector Radiance Reuse (Tier 2 전용)
+        //   exclusivity: 출력 reusedRadiance/validMask 는 Phase 12 composite input.
+        //   Phase 12 wiring 전에는 시각적 효과 없음 (architecture-only) — F6 디버그로만 확인.
+        if (m_motionVectorReuse.Init(m_core.Device(), m_dlss.RenderWidth(), m_dlss.RenderHeight()))
+        {
+            m_motionVectorReuse.SetTierThresholds(k_tierLow, k_tierHigh);
+
+            // History 자원: render-res, current DLSS 입력 자원과 동일 포맷
+            //   포맷이 정확히 일치해야 CopyResource 가 작동 (D3D12 사양).
+            auto createHistoryTex = [&](DXGI_FORMAT fmt, const wchar_t* name) -> ComPtr<ID3D12Resource>
+            {
+                D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+                D3D12_RESOURCE_DESC rd{};
+                rd.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+                rd.Width            = m_dlss.RenderWidth();
+                rd.Height           = m_dlss.RenderHeight();
+                rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+                rd.Format           = fmt; rd.SampleDesc = {1, 0};
+                rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+                rd.Flags            = D3D12_RESOURCE_FLAG_NONE;
+                ComPtr<ID3D12Resource> res;
+                ThrowIfFailed(m_core.Device()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                    D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&res)));
+                res->SetName(name);
+                return res;
+            };
+            // m_dlss.RenderAccum = RGBA32F, Depth = R32F, Normal = RGBA16F
+            m_radianceHistory = createHistoryTex(DXGI_FORMAT_R32G32B32A32_FLOAT, L"HPAR_RadianceHistory");
+            m_depthHistory    = createHistoryTex(DXGI_FORMAT_R32_FLOAT,           L"HPAR_DepthHistory");
+            m_normalHistory   = createHistoryTex(DXGI_FORMAT_R16G16B16A16_FLOAT, L"HPAR_NormalHistory");
+
+            std::println("[App] HPAR-PT Phase 7 MotionVectorReuse 활성화 — F5 토글 / F6 valid mask 시각화");
+        }
     }
     else
     {
@@ -379,6 +413,7 @@ void App::Init(HWND hwnd, uint32_t width, uint32_t height)
 void App::Shutdown()
 {
     m_core.FlushGPU();
+    m_motionVectorReuse.Shutdown();
     m_importanceVis.Shutdown();
     m_importanceMap.Shutdown();
     m_nrdDenoiser.Shutdown();
@@ -611,6 +646,7 @@ void App::SwitchScene(uint32_t id)
     m_cameraMoved = true;
     m_accumDirty  = true;  // 씬 내용이 바뀌므로 누적 버퍼 클리어 필요
     m_importanceMap.ResetHistory();  // HPAR-PT Phase 3: importance EMA history 무효화
+    m_motionVectorReuse.ResetHistory();  // HPAR-PT Phase 7: reuse history 무효화 (씬 전환 → 모든 픽셀 disocclusion)
 
     // GPU 완전 대기
     m_core.FlushGPU();
@@ -1155,6 +1191,38 @@ void App::OnKeyDown(uint32_t key)
                      m_tierDebug ? "ON" : "OFF", k_tierHigh, k_tierLow,
                      m_tierDebug && !m_importanceDebug ? "  ※ F1 도 켜야 화면 표시" : "");
     }
+    else if (key == VK_F5)
+    {
+        // Phase 7 — Motion Vector Radiance Reuse 토글 (DLSS 경로 전용, architecture-only)
+        if (m_radianceHistory)
+        {
+            m_reuseEnabled = !m_reuseEnabled;
+            if (m_reuseEnabled) m_motionVectorReuse.ResetHistory();  // 토글 ON 직후 history 무효
+            std::println("[App] Phase 7 MotionVectorReuse {} (Phase 12 composite wiring 전엔 시각적 효과 없음, F6 으로 valid mask 확인)",
+                         m_reuseEnabled ? "ON" : "OFF");
+        }
+        else
+        {
+            std::println("[App] Phase 7 MotionVectorReuse 미초기화 (DLSS off?)");
+        }
+    }
+    else if (key == VK_F6)
+    {
+        // Phase 7 — Reuse valid mask 시각화 토글 (Tier 2 valid 1=흰색, 그 외 0=검정)
+        //   m_reuseEnabled 도 자동으로 켜준다 (mask 가 갱신되어야 의미가 있음).
+        if (m_radianceHistory)
+        {
+            m_reuseDebug = !m_reuseDebug;
+            if (m_reuseDebug && !m_reuseEnabled)
+            {
+                m_reuseEnabled = true;
+                m_motionVectorReuse.ResetHistory();
+                std::println("[App] Phase 7 MotionVectorReuse 자동 ON (F6 디버그 시각화 의존)");
+            }
+            std::println("[App] Phase 7 reuse mask 시각화 {} (흰색=Tier 2 valid, 검정=else)",
+                         m_reuseDebug ? "ON" : "OFF");
+        }
+    }
     else if (key == 'U')
     {
         if (m_dlss.IsAvailable())
@@ -1164,6 +1232,7 @@ void App::OnKeyDown(uint32_t key)
             m_frameCount   = 0;
             m_cameraMoved  = true;
             m_accumDirty   = true;
+            m_motionVectorReuse.ResetHistory();  // Phase 7: dlss 전환 시 history 무효 (포맷 일치 보장 안 됨)
             std::println("[App] DLSS {} ({}x{} → {}x{}){}",
                          m_dlssEnabled ? "ON" : "OFF",
                          m_dlss.RenderWidth(), m_dlss.RenderHeight(),
@@ -1289,7 +1358,74 @@ void App::OnRender()
                                   m_dlss.SpecAlbedoResource());
         }
 
-        if (m_importanceDebug)
+        // Phase 7 — Motion Vector Radiance Reuse (Tier 2 전용, architecture-only)
+        //   exclusivity: 출력은 Phase 12 composite 의 input. 현재는 갱신만 하고 final output 변경 없음.
+        //   호출 순서: ImportanceMap.Apply 후 (smooth Î 가 UAV 로 readable) → reuse Apply → history copy.
+        if (m_reuseEnabled && m_radianceHistory && m_importanceMap.Resource())
+        {
+            m_motionVectorReuse.Apply(cmd,
+                                       m_dlss.DepthResource(),
+                                       m_dlss.NormalResource(),
+                                       m_dlss.MotionVecResource(),
+                                       m_depthHistory.Get(),
+                                       m_normalHistory.Get(),
+                                       m_radianceHistory.Get(),
+                                       m_importanceMap.Resource());
+
+            // 다음 frame 을 위한 history 갱신: current (UAV) → history (COMMON, COPY_DEST)
+            //   reuse 의 prev 입력들은 Apply 끝에서 COMMON 으로 돌려놨음.
+            auto copyToHistory = [&](ID3D12Resource* src, ID3D12Resource* dst)
+            {
+                D3D12_RESOURCE_BARRIER bars[2]{};
+                bars[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                bars[0].Transition.pResource   = src;
+                bars[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                bars[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
+                bars[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                bars[1] = bars[0];
+                bars[1].Transition.pResource   = dst;
+                bars[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+                bars[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
+                cmd->ResourceBarrier(2, bars);
+                cmd->CopyResource(dst, src);
+                bars[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+                bars[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                bars[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+                bars[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_COMMON;
+                cmd->ResourceBarrier(2, bars);
+            };
+            copyToHistory(m_dlss.RenderAccumResource(), m_radianceHistory.Get());
+            copyToHistory(m_dlss.DepthResource(),       m_depthHistory.Get());
+            copyToHistory(m_dlss.NormalResource(),      m_normalHistory.Get());
+        }
+
+        if (m_reuseDebug && m_reuseEnabled)
+        {
+            // Phase 7 F6 — reuse valid mask 시각화 (Phase 12 composite wiring 전 사전 확인용)
+            m_importanceVis.Apply(cmd, m_motionVectorReuse.ReuseValidMaskResource(),
+                                  DXGI_FORMAT_R8_UNORM);
+
+            D3D12_RESOURCE_BARRIER bars[2]{};
+            bars[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            bars[0].Transition.pResource   = m_importanceVis.OutputResource();
+            bars[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            bars[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            bars[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            bars[1] = bars[0];
+            bars[1].Transition.pResource   = m_core.BackBuffer();
+            bars[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            bars[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
+            cmd->ResourceBarrier(2, bars);
+            cmd->CopyResource(m_core.BackBuffer(), m_importanceVis.OutputResource());
+            bars[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            bars[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            bars[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            bars[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+            cmd->ResourceBarrier(2, bars);
+
+            ++m_dlssFrameIdx;
+        }
+        else if (m_importanceDebug)
         {
             // 디버그 시각화 경로 — DLSS Evaluate 우회, importance heatmap 을 backbuffer 로 직접 copy
             m_importanceVis.Apply(cmd, m_importanceMap.Resource());
@@ -1434,6 +1570,8 @@ void App::OnResize(uint32_t width, uint32_t height)
         m_dlssEnabled = false;
         m_frameCount  = 0;
         m_accumDirty  = true;
+        m_reuseEnabled = false;                // Phase 7: dlss off → reuse 자동 off
+        m_motionVectorReuse.ResetHistory();
         std::println("[App] 리사이즈 {}x{} — DLSS 비활성화 (재시작 시 복원)", width, height);
     }
     else

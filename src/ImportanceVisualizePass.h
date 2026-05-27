@@ -13,7 +13,9 @@ public:
 
     // importance(render-res R16F) → 내부 출력 텍스처(display-res RGBA8)
     //   importance: 호출 시 UAV 상태여야 함 — 내부에서 UAV→SRV→UAV transition
-    void Apply(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* importance);
+    //   srvFormat: 입력 자원의 SRV 포맷 (Phase 7 reuse mask 디버그는 R8_UNORM)
+    void Apply(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* importance,
+               DXGI_FORMAT srvFormat = DXGI_FORMAT_R16_FLOAT);
 
     // Phase 6 — Tier 시각화 모드 (F4 토글). false = Phase 1 heatmap.
     void SetTierMode(bool on, float low, float high) noexcept

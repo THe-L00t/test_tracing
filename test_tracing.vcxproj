@@ -107,6 +107,7 @@
     <ClCompile Include="src\NRDDenoiser.cpp" />
     <ClCompile Include="src\ImportanceMapPass.cpp" />
     <ClCompile Include="src\ImportanceVisualizePass.cpp" />
+    <ClCompile Include="src\MotionVectorReusePass.cpp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -126,6 +127,7 @@
     <ClInclude Include="src\NRDDenoiser.h" />
     <ClInclude Include="src\ImportanceMapPass.h" />
     <ClInclude Include="src\ImportanceVisualizePass.h" />
+    <ClInclude Include="src\MotionVectorReusePass.h" />
     <ClInclude Include="src\ShaderCompile.h" />
   </ItemGroup>
 
@@ -139,6 +141,7 @@
     <None Include="shaders\MetricHistogram.hlsl" />
     <None Include="shaders\MetricReduce.hlsl" />
     <None Include="shaders\ImportanceEMA.hlsl" />
+    <None Include="shaders\MotionVectorReuse.hlsl" />
   </ItemGroup>
 
   <!-- dxcompiler.dll / dxil.dll: DXR 런타임 셰이더 컴파일에 필요 -->
