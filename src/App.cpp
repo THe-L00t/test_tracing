@@ -782,6 +782,14 @@ void App::OnKeyDown(uint32_t key)
         m_accumDirty            = true;
         std::println("[App] 디노이저 {}", m_denoiseEnabled ? "ON" : "OFF");
     }
+    else if (key == 'R')
+    {
+        m_restirEnabled = !m_restirEnabled;
+        m_frameCount    = 0;
+        m_cameraMoved   = true;
+        m_accumDirty    = true;
+        std::println("[App] ReSTIR {}", m_restirEnabled ? "ON" : "OFF");
+    }
 }
 
 // ---------------------------------------------------------------
